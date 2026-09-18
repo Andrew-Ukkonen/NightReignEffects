@@ -1,8 +1,11 @@
+import { useState } from "react";
 import Checklist from "./Checklist.jsx";
 import { VERDICTS, SOURCES, WEP_TYPES } from "../model.js";
 
-export default function FilterPanel({ filters, counts, onChange }) {
+export default function FilterPanel({ filters, counts, onChange, collapsible }) {
   const { query, verdicts, weps, srcs } = filters;
+  const [open, setOpen] = useState(false);
+  const nActive = verdicts.size + weps.size + srcs.size;
 
   const toggle = (set, key) => {
     const next = new Set(set);
@@ -23,6 +26,20 @@ export default function FilterPanel({ filters, counts, onChange }) {
         />
       </div>
 
+      {collapsible && (
+        <button
+          className="ftoggle"
+          type="button"
+          aria-expanded={open}
+          aria-controls="filter-groups"
+          onClick={() => setOpen(!open)}
+        >
+          Filters{nActive > 0 && <span className="n"> · {nActive} active</span>}
+          <span aria-hidden="true">{open ? "▴" : "▾"}</span>
+        </button>
+      )}
+
+      <div id="filter-groups" hidden={collapsible && !open}>
       <div className="panel">
         <p className="ptitle">
           Weapon type
@@ -80,6 +97,7 @@ export default function FilterPanel({ filters, counts, onChange }) {
             );
           })}
         </div>
+      </div>
       </div>
     </aside>
   );

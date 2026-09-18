@@ -1,8 +1,10 @@
 import { useMemo, useRef, useState } from "react";
 import FilterPanel from "./components/FilterPanel.jsx";
 import EffectsTable from "./components/EffectsTable.jsx";
+import EffectCards from "./components/EffectCards.jsx";
 import RulesPanel from "./components/RulesPanel.jsx";
 import { ROWS, passes } from "./model.js";
+import { useMediaQuery } from "./hooks.js";
 
 const PAGE = 400;
 
@@ -16,6 +18,7 @@ export default function App() {
   });
   const [limit, setLimit] = useState(PAGE);
   const boxRef = useRef(null);
+  const isMobile = useMediaQuery("(max-width: 780px)");
 
   const f = useMemo(
     () => ({ ...filters, query: filters.query.trim().toLowerCase() }),
@@ -55,7 +58,8 @@ export default function App() {
 
   function pickCategory(cat) {
     updateFilters({ groupCat: cat, query: "" });
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: 0, behavior: reduce ? "auto" : "smooth" });
   }
 
   const shown = filtered.slice(0, limit);
@@ -72,12 +76,12 @@ export default function App() {
         Every named special effect in Elden Ring Nightreign's <b>SpEffectParam</b> table (game
         version on disk, decoded 2026-09-17), with the engine field that decides stacking:{" "}
         <b>spCategory</b>. Effects sharing a non-zero category interact by that category's rule —
-        the rules are on the right. Click a category number in the table to see everything a buff
+        see the "How stacking works" panel. Click a category number to see everything a buff
         conflicts with.
       </p>
 
       <div className="layout">
-        <FilterPanel filters={filters} counts={counts} onChange={updateFilters} />
+        <FilterPanel filters={filters} counts={counts} onChange={updateFilters} collapsible={isMobile} />
 
         <main className="main">
           {filters.groupCat !== null && (
@@ -92,11 +96,13 @@ export default function App() {
               </button>
             </div>
           )}
-          <p className="count">
+          <p className="count" aria-live="polite">
             Showing {shown.length.toLocaleString()} of {filtered.length.toLocaleString()} effects
             ({ROWS.length.toLocaleString()} named total){wepNote}
           </p>
-          <EffectsTable rows={shown} onPickCategory={pickCategory} boxRef={boxRef} />
+          {isMobile
+            ? <EffectCards rows={shown} onPickCategory={pickCategory} />
+            : <EffectsTable rows={shown} onPickCategory={pickCategory} boxRef={boxRef} />}
           {shown.length < filtered.length && (
             <button className="more" type="button" onClick={() => setLimit(limit + PAGE)}>
               Show more

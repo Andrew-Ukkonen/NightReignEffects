@@ -1,6 +1,6 @@
 import { VERDICTS, SOURCES, WEP_NAME, durText } from "../model.js";
 
-function WepCell({ weps }) {
+export function WepCell({ weps }) {
   if (weps === "*") return <span className="wtag any">any weapon</span>;
   if (!weps.length) return <span className="num-plain">—</span>;
   const vis = weps.slice(0, 3);
