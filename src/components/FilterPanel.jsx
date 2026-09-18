@@ -1,0 +1,86 @@
+import Checklist from "./Checklist.jsx";
+import { VERDICTS, SOURCES, WEP_TYPES } from "../model.js";
+
+export default function FilterPanel({ filters, counts, onChange }) {
+  const { query, verdicts, weps, srcs } = filters;
+
+  const toggle = (set, key) => {
+    const next = new Set(set);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  };
+
+  return (
+    <aside className="side filtercol" aria-label="Filters">
+      <div className="panel">
+        <p className="ptitle">Search</p>
+        <input
+          type="search"
+          placeholder="Effect, weapon, or relic…"
+          aria-label="Search effects"
+          value={query}
+          onChange={(e) => onChange({ query: e.target.value })}
+        />
+      </div>
+
+      <div className="panel">
+        <p className="ptitle">
+          Weapon type
+          {weps.size > 0 && (
+            <button className="pclear" type="button" onClick={() => onChange({ weps: new Set() })}>
+              clear
+            </button>
+          )}
+        </p>
+        <Checklist
+          label="Filter by weapon type"
+          items={[{ key: "*", label: "Any weapon" }, ...WEP_TYPES.map(([k, name]) => ({ key: k, label: name }))]}
+          selected={weps}
+          counts={counts.weps}
+          onToggle={(k) => onChange({ weps: toggle(weps, k) })}
+        />
+      </div>
+
+      <div className="panel">
+        <p className="ptitle">
+          Source
+          {srcs.size > 0 && (
+            <button className="pclear" type="button" onClick={() => onChange({ srcs: new Set() })}>
+              clear
+            </button>
+          )}
+        </p>
+        <Checklist
+          short
+          label="Filter by source"
+          items={Object.entries(SOURCES).map(([k, name]) => ({ key: k, label: name }))}
+          selected={srcs}
+          counts={counts.srcs}
+          onToggle={(k) => onChange({ srcs: toggle(srcs, k) })}
+        />
+      </div>
+
+      <div className="panel">
+        <p className="ptitle">Stacking rule</p>
+        <div className="chips" role="group" aria-label="Filter by stacking rule">
+          {Object.entries(VERDICTS).map(([k, v]) => {
+            const on = verdicts.has(k);
+            const n = counts.verdicts[k] || 0;
+            return (
+              <button
+                key={k}
+                type="button"
+                className={"chip " + v.cls + (!n ? " zero" : "")}
+                aria-pressed={on}
+                onClick={() => onChange({ verdicts: toggle(verdicts, k) })}
+              >
+                <span className="dot"></span>
+                {v.label} · {n}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </aside>
+  );
+}
