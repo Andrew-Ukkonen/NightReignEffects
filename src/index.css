@@ -61,12 +61,14 @@ h1 {
 }
 @media (max-width: 1180px) {
   .layout { grid-template-columns: 240px minmax(0, 1fr); }
-  .rulecol { grid-column: 1 / -1; order: 3; position: static; max-height: none; }
+  .filtercol { grid-row: span 2; }
+  .rulecol { grid-column: 2; order: 3; position: static; max-height: none; }
   .rulecol .rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
 }
 @media (max-width: 780px) {
   .layout { grid-template-columns: minmax(0, 1fr); }
-  .filtercol { position: static; max-height: none; }
+  .filtercol { position: static; max-height: none; grid-row: auto; }
+  .rulecol { grid-column: auto; }
 }
 
 /* ---- filter panel ---- */
