@@ -15,7 +15,7 @@ export default function EffectCards({ rows, onPickCategory }) {
             </div>
             <h3 className="card-name">
               {r.name}
-              {r.mod && <span className="mod">{r.mod}</span>}
+              {r.mod && <span className={r.mod.startsWith("scripted") ? "mod scripted" : "mod"}>{r.mod}</span>}
             </h3>
             {r.via && <span className="via">from: {r.via}</span>}
             <div className="card-tags">

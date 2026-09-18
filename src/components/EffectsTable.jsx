@@ -32,7 +32,7 @@ export default function EffectsTable({ rows, onPickCategory, boxRef }) {
                 <td className="num">{r.id}</td>
                 <td className="name">
                   {r.name}
-                  {r.mod && <span className="mod">{r.mod}</span>}
+                  {r.mod && <span className={r.mod.startsWith("scripted") ? "mod scripted" : "mod"}>{r.mod}</span>}
                   {r.via && <span className="via">from: {r.via}</span>}
                 </td>
                 <td className={vd.cls}><span className="pill">{vd.label}</span></td>

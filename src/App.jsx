@@ -74,7 +74,7 @@ export default function App() {
       <h1>Nightreign Buff Stacking</h1>
       <p className="sub">
         Every named special effect in Elden Ring Nightreign's <b>SpEffectParam</b> table (game
-        version on disk, decoded 2026-09-17), with the engine field that decides stacking:{" "}
+        version on disk, decoded 2026-09-18), with the engine field that decides stacking:{" "}
         <b>spCategory</b>. Effects sharing a non-zero category interact by that category's rule —
         see the "How stacking works" panel. Click a category number to see everything a buff
         conflicts with.
@@ -123,7 +123,15 @@ export default function App() {
               filter option; enemy, world, and internal effects match no weapon filter. Relic
               sourcing is traced through <code>EquipParamAntique</code> effect pools, so an effect
               can carry both Relic and Weapon-passive tags when both grant it. Duration ∞ means the
-              effect lasts until removed by script or death.
+              effect lasts until removed by script or death. Value strings under each effect name
+              are decoded from every non-default gameplay field of its SpEffectParam row: known
+              stat fields get readable labels (rates shown as % change, negation inverted so
+              "+" means less damage taken), uncertain multipliers are shown as ×N with their raw
+              field name, and granted items/spells/skills are named via the Paramdex row names.
+              "scripted (state N)" means the row carries no stat data itself — its behavior is
+              triggered by that SP_EFFECT_TYPE state in the game's event scripts, so the actual
+              numbers live outside SpEffectParam. Effects with no value line have nothing
+              non-default beyond bookkeeping fields.
             </p>
           </details>
         </main>
