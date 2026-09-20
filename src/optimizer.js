@@ -1,10 +1,12 @@
 import {
   NR_ATTACH, NR_POOL_NORMAL, NR_POOL_DEEP, NR_RELICS, NR_VESSELS,
   NR_CONDS, NR_HEROES, NR_COLORS,
+  NR_WEAPONS, NR_CALC, NR_AEC, NR_HERO_STATS,
 } from "./relicdata.js";
-import { ROWS } from "./model.js";
+import { NR_SP_KIND } from "./relicdata.js";
+import { ROWS, kindAllows } from "./model.js";
 
-export { NR_HEROES, NR_COLORS, NR_CONDS };
+export { NR_HEROES, NR_COLORS, NR_CONDS, NR_WEAPONS };
 export const CHANNELS = [
   { key: "phys", bit: 1, label: "Physical" },
   { key: "mag", bit: 2, label: "Magic" },
@@ -12,6 +14,7 @@ export const CHANNELS = [
   { key: "lit", bit: 8, label: "Lightning" },
   { key: "hol", bit: 16, label: "Holy" },
 ];
+export const STAT_NAMES = ["Str", "Dex", "Int", "Fai", "Arc"];
 
 export const ROW_BY_ID = new Map(ROWS.map((r) => [r.id, r]));
 
@@ -19,27 +22,94 @@ export const VESSELS = NR_VESSELS.map(([id, hero, name, slots, deepSlots]) => ({
   id, hero, name, slots, deepSlots,
 }));
 
-// One equippable relic-effect line.
+// ---- hero attributes & weapon attack rating ----
+
+// [Str, Dex, Int, Fai, Arc] at a level, interpolating between the game's
+// anchor rows (levels 1, 2, 12, 15).
+export function heroBaseStats(hero, level) {
+  const anchors = NR_HERO_STATS[hero] || [];
+  if (!anchors.length) return [10, 10, 10, 10, 10];
+  if (level <= anchors[0][0]) return anchors[0].slice(1);
+  for (let i = 0; i < anchors.length - 1; i++) {
+    const [l0, ...s0] = anchors[i];
+    const [l1, ...s1] = anchors[i + 1];
+    if (level <= l1) {
+      const t = (level - l0) / (l1 - l0);
+      return s0.map((v, k) => Math.round(v + (s1[k] - v) * t));
+    }
+  }
+  return anchors[anchors.length - 1].slice(1);
+}
+
+// CalcCorrectGraph: piecewise growth curve, the engine's standard shape.
+function calcCurve(graphId, x) {
+  const g = NR_CALC[graphId];
+  if (!g) return 0;
+  const [mv, gv, ad] = g;
+  if (x <= mv[0]) return gv[0];
+  for (let i = 0; i < 4; i++) {
+    if (x <= mv[i + 1] || i === 3) {
+      const span = mv[i + 1] - mv[i] || 1;
+      const r = Math.min(Math.max((x - mv[i]) / span, 0), 1);
+      const a = ad[i];
+      const growth = a > 0 ? Math.pow(r, a) : a < 0 ? 1 - Math.pow(1 - r, -a) : r;
+      return gv[i] + (gv[i + 1] - gv[i]) * growth;
+    }
+  }
+  return gv[4];
+}
+
+// Attack rating per element: base × (1 + Σ aecRate × scaling × curve(stat)).
+export function weaponAR(weapon, stats) {
+  const [, , , base, scal, ct, aecId] = weapon;
+  const aec = NR_AEC[aecId];
+  return base.map((b, e) => {
+    if (!b) return 0;
+    let sum = 0;
+    for (let s = 0; s < 5; s++) {
+      const rate = aec ? aec[e][s] : 0;
+      if (!rate || !scal[s]) continue;
+      sum += (rate / 100) * (scal[s] / 100) * (calcCurve(ct[e], stats[s]) / 100);
+    }
+    return b * (1 + sum);
+  });
+}
+
+// Element weights implied by a weapon: its AR split at the base stats.
+export function weaponWeights(weapon, stats) {
+  const ar = weaponAR(weapon, stats);
+  const total = ar.reduce((a, b) => a + b, 0) || 1;
+  return ar.map((a) => a / total);
+}
+
+// Per-element damage ratio from attribute bonuses: AR(base+delta)/AR(base).
+function statRatios(sc, delta) {
+  if (!sc.weapon || !delta.some((d) => d)) return null;
+  const base = weaponAR(sc.weapon, sc.stats);
+  const boosted = weaponAR(sc.weapon, sc.stats.map((v, i) => v + delta[i]));
+  return base.map((b, e) => (b > 0 ? boosted[e] / b : 1));
+}
+
+// ---- effects & scoring ----
+// A scenario sc = { weights, conds, weapon (NR_WEAPONS tuple | null), stats }.
+
 export function makeEffect(attachId) {
   const [name, allowMask, instances, spIds, compat] = NR_ATTACH[attachId];
   return { attachId, name, allowMask, instances, spIds, compat };
-}
-
-// Standalone weighted multiplier of one effect under a scenario (no stacking).
-export function effectValue(eff, weights, conds) {
-  const prod = channelProducts(eff.instances, weights, conds);
-  return score(prod, weights);
 }
 
 function condEnabled(condId, conds) {
   return condId === 0 || conds.has(condId);
 }
 
-function channelProducts(instances, weights, conds) {
+function channelProducts(instances, sc) {
   const prod = [1, 1, 1, 1, 1];
-  for (const [, , , comps] of instances) {
+  for (const [spId, , , comps] of instances) {
+    // with a weapon chosen, buffs that can't apply to its class score nothing
+    // (melee-only on a bow, pot/perfume buffs on a weapon swing, …)
+    if (sc.weapon && !kindAllows(NR_SP_KIND[spId], sc.weapon[2])) continue;
     for (const [bits, mult, cond] of comps) {
-      if (!condEnabled(cond, conds)) continue;
+      if (!condEnabled(cond, sc.conds)) continue;
       CHANNELS.forEach((ch, i) => {
         if (bits & ch.bit) prod[i] *= mult;
       });
@@ -48,13 +118,34 @@ function channelProducts(instances, weights, conds) {
   return prod;
 }
 
+function statDeltaOf(instances) {
+  const delta = [0, 0, 0, 0, 0];
+  for (const inst of instances) {
+    const stats = inst[4];
+    if (stats) for (let i = 0; i < 5; i++) delta[i] += stats[i];
+  }
+  return delta;
+}
+
 function score(prod, weights) {
   let s = 0, total = 0;
-  CHANNELS.forEach((ch, i) => {
+  CHANNELS.forEach((_, i) => {
     s += weights[i] * prod[i];
     total += weights[i];
   });
   return total ? s / total : 1;
+}
+
+function scoreInstances(instances, sc) {
+  const prod = channelProducts(instances, sc);
+  const ratios = statRatios(sc, statDeltaOf(instances));
+  if (ratios) ratios.forEach((r, e) => { prod[e] *= r; });
+  return { prod, score: score(prod, sc.weights) };
+}
+
+// Standalone weighted multiplier of one effect under a scenario (no stacking).
+export function effectValue(eff, sc) {
+  return scoreInstances(eff.instances, sc).score;
 }
 
 // Apply spCategory stacking rules to a multiset of instances.
@@ -65,13 +156,13 @@ function score(prod, weights) {
 //   100–299    — one effect per category (200: per priority) — keep most valuable
 //   1000s      — highest categoryPriority wins
 //   10000s     — first applied wins: one per category — keep most valuable
-export function applyStacking(instances, weights, conds) {
+export function applyStacking(instances, sc) {
   const kept = [];
   const dropped = [];
-  const val = (inst) => score(channelProducts([inst], weights, conds), weights);
+  const val = (inst) => scoreInstances([inst], sc).score;
 
   const seen20 = new Set();
-  const groups = new Map(); // groupKey -> {best, bestVal, rule}
+  const groups = new Map();
   for (const inst of instances) {
     const [spId, cat, prio] = inst;
     if (cat === 20) {
@@ -107,16 +198,17 @@ function collect(groups, key, inst, v, reason) {
   }
 }
 
-// Evaluate a full set of effects: stacked per-channel products + weighted score.
-export function evaluate(effects, weights, conds) {
+// Evaluate a full set of effects: stacked per-channel products (including
+// attribute-scaling gains through the equipped weapon) + weighted score.
+export function evaluate(effects, sc) {
   const instances = effects.flatMap((e) => e.instances);
-  const { kept, dropped } = applyStacking(instances, weights, conds);
-  const prod = channelProducts(kept, weights, conds);
-  return { prod, score: score(prod, weights), dropped };
+  const { kept, dropped } = applyStacking(instances, sc);
+  const { prod, score: s } = scoreInstances(kept, sc);
+  return { prod, score: s, dropped, statDelta: statDeltaOf(kept) };
 }
 
 // Candidate pool effects for a hero (rolled-relic mode).
-export function poolCandidates({ hero, deep, weights, conds }) {
+export function poolCandidates({ hero, deep, sc }) {
   const pool = deep ? NR_POOL_DEEP : NR_POOL_NORMAL;
   const seen = new Set();
   const out = [];
@@ -125,7 +217,7 @@ export function poolCandidates({ hero, deep, weights, conds }) {
     seen.add(attachId);
     const eff = makeEffect(attachId);
     if (!(eff.allowMask & (1 << hero))) continue;
-    if (effectValue(eff, weights, conds) <= 1.0001) continue;
+    if (effectValue(eff, sc) <= 1.0001) continue;
     eff.weight = weight;
     out.push(eff);
   }
@@ -139,21 +231,21 @@ export function poolCandidates({ hero, deep, weights, conds }) {
 const rollKey = (eff) => (eff.compat !== -1 ? "c" + eff.compat : "a" + eff.attachId);
 
 // Best possible rolled build: 3 relics × 3 effect lines under the roll rules.
-// Greedy on marginal gain — exact for independent multiplicative effects, and
-// group rules only ever make marginal gains smaller, so re-evaluating each
-// pick handles them.
-export function optimizeRolled({ hero, deep, weights, conds, slots = 9 }) {
-  const cands = poolCandidates({ hero, deep, weights, conds });
+// Greedy on marginal gain — near-exact for independent multiplicative effects;
+// group rules and stat diminishing returns only shrink marginal gains, so
+// re-evaluating each pick handles them.
+export function optimizeRolled({ hero, deep, sc, slots = 9 }) {
+  const cands = poolCandidates({ hero, deep, sc });
   const picks = [];
-  const keyCount = new Map(); // rollKey -> picked count (≤ 3: one per relic)
-  const copies = new Map(); // attachId -> picked count (≤ 3)
+  const keyCount = new Map();
+  const copies = new Map();
   for (let i = 0; i < slots; i++) {
     let best = null, bestGain = 1.0001;
-    const base = evaluate(picks, weights, conds).score;
+    const base = evaluate(picks, sc).score;
     for (const c of cands) {
       if ((keyCount.get(rollKey(c)) || 0) >= 3) continue;
       if ((copies.get(c.attachId) || 0) >= 3) continue;
-      const gain = evaluate([...picks, c], weights, conds).score / base;
+      const gain = evaluate([...picks, c], sc).score / base;
       if (gain > bestGain) { bestGain = gain; best = c; }
     }
     if (!best) break;
@@ -173,9 +265,7 @@ export function optimizeRolled({ hero, deep, weights, conds, slots = 9 }) {
   }
   const ordered = [...groups.values()].sort((a, b) => b.length - a.length);
   for (const members of ordered) {
-    const sorted = [...members].sort(
-      (a, b) => effectValue(b, weights, conds) - effectValue(a, weights, conds)
-    );
+    const sorted = [...members].sort((a, b) => effectValue(b, sc) - effectValue(a, sc));
     for (const eff of sorted) {
       const target = relics
         .filter((r) => r.length < 3 &&
@@ -184,7 +274,7 @@ export function optimizeRolled({ hero, deep, weights, conds, slots = 9 }) {
       if (target) target.push(eff);
     }
   }
-  return { relics, ...evaluate(picks, weights, conds), effects: picks };
+  return { relics, ...evaluate(picks, sc), effects: picks };
 }
 
 // Fixed relics legal for a slot color in a mode.
@@ -201,7 +291,7 @@ export function relicEffects(attachIds) {
 }
 
 // Best build from fixed (named) relics for a vessel: greedy + swap passes.
-export function optimizeFixed({ hero, vessel, deep, weights, conds }) {
+export function optimizeFixed({ hero, vessel, deep, sc }) {
   const slotColors = deep ? vessel.deepSlots : vessel.slots;
   const perSlot = slotColors.map((c) => fixedForSlot(c, deep, hero));
   let chosen = [null, null, null];
@@ -213,20 +303,20 @@ export function optimizeFixed({ hero, vessel, deep, weights, conds }) {
       const base = effectsOf(others);
       let best = chosen[s];
       let bestScore = evaluate(
-        [...base, ...(best ? relicEffects(best[4]) : [])], weights, conds
+        [...base, ...(best ? relicEffects(best[4]) : [])], sc
       ).score;
       for (const r of perSlot[s]) {
         // named relics are unique items — one copy per build
         if (others.some((o) => o && o[0] === r[0])) continue;
-        const sc = evaluate([...base, ...relicEffects(r[4])], weights, conds).score;
-        if (sc > bestScore + 1e-9) { bestScore = sc; best = r; changed = true; }
+        const s2 = evaluate([...base, ...relicEffects(r[4])], sc).score;
+        if (s2 > bestScore + 1e-9) { bestScore = s2; best = r; changed = true; }
       }
       chosen[s] = best;
     }
     if (!changed) break;
   }
   const effects = effectsOf(chosen);
-  return { relics: chosen, ...evaluate(effects, weights, conds), effects };
+  return { relics: chosen, ...evaluate(effects, sc), effects };
 }
 
 // Conditions that actually appear on candidate damage effects, for the UI.

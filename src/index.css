@@ -39,10 +39,11 @@ body {
   html, body, #root { height: 100%; }
   body { overflow: hidden; }
   .wrap { height: 100%; display: flex; flex-direction: column; }
-  .layout { flex: 1; min-height: 0; }
-  .side { position: static; max-height: 100%; }
+  .layout, .optlayout { flex: 1; min-height: 0; }
+  .side { position: static; max-height: 100%; overflow-y: auto; }
   .main { display: flex; flex-direction: column; min-height: 0; height: 100%; }
   .tablebox { flex: 1; min-height: 0; }
+  .optmain { overflow-y: auto; max-height: 100%; }
 }
 @media (max-width: 1180px) {
   .tablebox { max-height: 70vh; }

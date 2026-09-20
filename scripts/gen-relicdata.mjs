@@ -50,6 +50,12 @@ const standNames = names("AntiqueStandParam.json");
 const antique = parseParam("EquipParamAntique.param.xml");
 const weapons = parseParam("EquipParamWeapon.param.xml");
 const saNames = names("SwordArtsParam.json");
+const wepNames = names("EquipParamWeapon.json");
+const calcGraph = parseParam("CalcCorrectGraph.param.xml");
+const aecParam = parseParam("AttackElementCorrectParam.param.xml");
+const heroStatus = parseParam("HeroStatusParam.param.xml");
+
+const val = (p, r, f) => (r[f] !== undefined ? +r[f] : +(p.defaults[f] ?? 0));
 const attach = parseParam("AttachEffectParam.param.xml");
 const table = parseParam("AttachEffectTableParam.param.xml");
 const stand = parseParam("AntiqueStandParam.param.xml");
@@ -156,8 +162,15 @@ function rowComps(r, baseCond) {
   return comps;
 }
 
+// Attribute bonuses that scale weapon damage: [Str, Dex, Int, Fai, Arc]
+const STAT_FIELDS = [
+  "addStrengthStatus", "addDexterityStatus", "addMagicStatus",
+  "addFaithStatus", "addLuckStatus",
+];
+
 // Walk an SpEffect and its trigger chains (depth ≤ 2); return instances
-// [[spId, spCategory, categoryPriority, comps]] having any damage component.
+// [[spId, spCategory, categoryPriority, comps, statAdds?]] having any damage
+// component or damage-relevant attribute bonus.
 function spInstances(rootId) {
   const out = [];
   const seen = new Set();
@@ -167,7 +180,13 @@ function spInstances(rootId) {
     const r = spById.get(id);
     if (!r) return;
     const comps = rowComps(r, cond);
-    if (comps.length) out.push([id, spVal(r, "spCategory"), spVal(r, "categoryPriority"), comps]);
+    const stats = STAT_FIELDS.map((f) => spVal(r, f));
+    const hasStats = stats.some((s) => s !== 0);
+    if (comps.length || hasStats) {
+      const inst = [id, spVal(r, "spCategory"), spVal(r, "categoryPriority"), comps];
+      if (hasStats) inst.push(stats);
+      out.push(inst);
+    }
     for (const f of CHAIN_FIELDS) {
       const next = spVal(r, f);
       if (next > 0) walk(next, depth + 1, COND_TRIGGER);
@@ -218,8 +237,12 @@ for (const r of sp.rows) {
     .map((f) => spVal(r, f))
     .filter((v) => v !== 0);
   for (const s of subs) if (SUBCAT_KIND[s]) kinds.add(SUBCAT_KIND[s]);
-  if (!subs.length && (spVal(r, "magParamChange") || spVal(r, "miracleParamChange") || spVal(r, "shamanParamChange")))
-    kinds.add("c");
+  // exactly one spell flag = a sorcery-only / incantation-only buff; both set
+  // means the buff extends to spells on top of weapon attacks (no restriction —
+  // e.g. Physical Attack Up carries both flags)
+  const mag = spVal(r, "magParamChange") ? 1 : 0;
+  const mir = spVal(r, "miracleParamChange") ? 1 : 0;
+  if (!subs.length && (mag ^ mir)) kinds.add("c");
   if (kinds.size === 1) SP_KIND[+r.id] = [...kinds][0];
 }
 
@@ -286,6 +309,76 @@ for (const r of antique.rows) {
   RELICS.push([id, name, +(r.relicColor ?? 0), r.isDeepRelic === "1" ? 1 : 0, attachIds]);
 }
 
+// ---- weapons & attribute scaling (for stat-relic damage valuation) ----
+// AR model: AR_e = base_e × (1 + Σ_stat aecRate/100 × correct_stat/100 ×
+// curve(correctType_e, statValue)/100) — the engine's standard formula.
+const ELEMENTS = ["Physics", "Magic", "Fire", "Thunder", "Dark"];
+const AEC_STATS = ["Strength", "Dexterity", "Magic", "Faith", "Luck"];
+
+const usedCalc = new Set();
+const usedAec = new Set();
+const WEAPONS = [];
+for (const w of weapons.rows) {
+  const name = wepNames.get(+w.id);
+  const wt = val(weapons, w, "wepType");
+  if (!name || !wt || /\[Unknown|\[NPC|NPC\]|\[Cut/i.test(name)) continue;
+  const base = [
+    val(weapons, w, "attackBasePhysics"), val(weapons, w, "attackBaseMagic"),
+    val(weapons, w, "attackBaseFire"), val(weapons, w, "attackBaseThunder"),
+    val(weapons, w, "attackBaseDark"),
+  ];
+  if (!base.some((b) => b > 0)) continue;
+  const scal = [
+    val(weapons, w, "correctStrength"), val(weapons, w, "correctAgility"),
+    val(weapons, w, "correctMagic"), val(weapons, w, "correctFaith"),
+    val(weapons, w, "correctLuck"),
+  ].map((x) => Math.round(x * 10) / 10);
+  const ct = ELEMENTS.map((e) => val(weapons, w, "correctType_" + e));
+  const aecId = val(weapons, w, "attackElementCorrectId");
+  ct.forEach((c) => usedCalc.add(c));
+  usedAec.add(aecId);
+  WEAPONS.push([+w.id, name, wt, base, scal, ct, aecId]);
+}
+
+const CALC = {};
+for (const g of calcGraph.rows) {
+  if (!usedCalc.has(+g.id)) continue;
+  CALC[+g.id] = [
+    [0, 1, 2, 3, 4].map((i) => val(calcGraph, g, "stageMaxVal" + i)),
+    [0, 1, 2, 3, 4].map((i) => val(calcGraph, g, "stageMaxGrowVal" + i)),
+    [0, 1, 2, 3, 4].map((i) => val(calcGraph, g, "adjPt_maxGrowVal" + i)),
+  ];
+}
+
+const AEC = {};
+for (const a of aecParam.rows) {
+  if (!usedAec.has(+a.id)) continue;
+  AEC[+a.id] = ELEMENTS.map((e) =>
+    AEC_STATS.map((s) => {
+      if (!val(aecParam, a, `is${s}Correct_by${e}`)) return 0;
+      const ov = val(aecParam, a, `overwrite${s}CorrectRate_by${e}`);
+      return ov >= 0 ? ov : 100;
+    })
+  );
+}
+
+// hero attribute anchors [level, Str, Dex, Int, Fai, Arc] — levels between
+// anchors interpolate linearly (game rows exist for levels 1, 2, 12, 15)
+const HERO_STATS = HEROES.map((_, i) => {
+  const anchors = [];
+  for (let n = 0; n < 4; n++) {
+    const r = heroStatus.rows.find((x) => +x.id === (i + 1) * 10000 + n);
+    if (!r) continue;
+    anchors.push([
+      val(heroStatus, r, "totalLevel"),
+      val(heroStatus, r, "statStrength"), val(heroStatus, r, "statDexterity"),
+      val(heroStatus, r, "statIntelligence"), val(heroStatus, r, "statFaith"),
+      val(heroStatus, r, "statArcane"),
+    ]);
+  }
+  return anchors.sort((a, b) => a[0] - b[0]);
+});
+
 // ---- vessels ----
 const VESSELS = [];
 for (const v of stand.rows) {
@@ -325,6 +418,14 @@ export const NR_SP_KIND = ${JSON.stringify(SP_KIND)};
 // Ash of War / skill effects: weapon classes whose fixed skill triggers them
 // ([] = no Nightreign weapon carries the skill). Absent = not an AoW effect.
 export const NR_AOW_WEPS = ${JSON.stringify(AOW_WEPS)};
+// weapons: [id, name, wepType, [base atk ×5 elements], [scaling% Str/Dex/Int/Fai/Arc], [CalcCorrectGraph id ×5], attackElementCorrectId]
+export const NR_WEAPONS = ${JSON.stringify(WEAPONS)};
+// CalcCorrectGraph: id -> [[stageMaxVal×5],[stageMaxGrowVal×5],[adjPt×5]]
+export const NR_CALC = ${JSON.stringify(CALC)};
+// AttackElementCorrectParam: id -> per element [rate% per stat Str/Dex/Int/Fai/Arc]
+export const NR_AEC = ${JSON.stringify(AEC)};
+// per hero: attribute anchors [level, Str, Dex, Int, Fai, Arc]; interpolate between
+export const NR_HERO_STATS = ${JSON.stringify(HERO_STATS)};
 `;
 fs.writeFileSync(path.join(import.meta.dirname, "../src/relicdata.js"), out);
 console.log(

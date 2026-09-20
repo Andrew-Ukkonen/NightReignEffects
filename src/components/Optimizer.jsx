@@ -1,16 +1,18 @@
 import { useMemo, useState } from "react";
 import {
-  NR_HEROES, NR_COLORS, NR_CONDS, CHANNELS, VESSELS, ROW_BY_ID,
+  NR_HEROES, NR_COLORS, NR_CONDS, NR_WEAPONS, CHANNELS, STAT_NAMES, VESSELS, ROW_BY_ID,
   optimizeRolled, optimizeFixed, relevantConds, makeEffect, effectValue,
+  heroBaseStats, weaponWeights, weaponAR,
 } from "../optimizer.js";
 import { NR_COND_WEP } from "../relicdata.js";
-import { WEP_NAME, cleanName } from "../model.js";
+import { WEP_NAME, WEP_TYPES, cleanName } from "../model.js";
 
 const COLOR_CLASS = ["c-red", "c-blue", "c-yellow", "c-green", "c-white"];
 const COLOR_NAME = [...NR_COLORS, "White (any)"];
+const LEVELS = Array.from({ length: 15 }, (_, i) => i + 1);
 
-function EffectLine({ eff, weights, conds }) {
-  const v = effectValue(eff, weights, conds);
+function EffectLine({ eff, sc }) {
+  const v = effectValue(eff, sc);
   const mods = eff.spIds
     .map((id) => ROW_BY_ID.get(id))
     .filter(Boolean)
@@ -19,7 +21,7 @@ function EffectLine({ eff, weights, conds }) {
   const needs = [
     ...new Set(
       eff.instances.flatMap(([, , , comps]) =>
-        comps.filter(([, , c]) => c !== 0 && !conds.has(c)).map(([, , c]) => NR_CONDS[c])
+        comps.filter(([, , c]) => c !== 0 && !sc.conds.has(c)).map(([, , c]) => NR_CONDS[c])
       )
     ),
   ];
@@ -41,6 +43,9 @@ export default function Optimizer() {
   const [source, setSource] = useState("rolled"); // rolled | fixed
   const [vesselId, setVesselId] = useState(null);
   const [elements, setElements] = useState(() => new Set(["phys"]));
+  const [level, setLevel] = useState(15);
+  const [wepClass, setWepClass] = useState(0);
+  const [weaponId, setWeaponId] = useState(0);
   const [wepType, setWepType] = useState(0);
   // conditions are assumed active by default — this tracks the ones opted OUT
   const [condsOff, setCondsOff] = useState(() => new Set());
@@ -50,9 +55,23 @@ export default function Optimizer() {
   const vessel =
     heroVessels.find((v) => v.id === vesselId) || heroVessels[0] || null;
 
+  const stats = useMemo(() => heroBaseStats(hero, level), [hero, level]);
+
+  const classWeapons = useMemo(
+    () => NR_WEAPONS.filter((w) => w[2] === wepClass).sort((a, b) => a[1].localeCompare(b[1])),
+    [wepClass]
+  );
+  const weapon = useMemo(
+    () => (weaponId ? NR_WEAPONS.find((w) => w[0] === weaponId) || null : null),
+    [weaponId]
+  );
+
   const weights = useMemo(
-    () => CHANNELS.map((ch) => (elements.has(ch.key) ? 1 : 0)),
-    [elements]
+    () =>
+      weapon
+        ? weaponWeights(weapon, stats)
+        : CHANNELS.map((ch) => (elements.has(ch.key) ? 1 : 0)),
+    [weapon, stats, elements]
   );
 
   const condList = useMemo(
@@ -79,14 +98,19 @@ export default function Optimizer() {
     return s;
   }, [condList, condsOff, wepType]);
 
+  const sc = useMemo(
+    () => ({ weights, conds, weapon, stats }),
+    [weights, conds, weapon, stats]
+  );
+
   const result = useMemo(() => {
     if (!weights.some((w) => w)) return null;
     return source === "rolled"
-      ? optimizeRolled({ hero, deep, weights, conds })
+      ? optimizeRolled({ hero, deep, sc })
       : vessel
-        ? optimizeFixed({ hero, vessel, deep, weights, conds })
+        ? optimizeFixed({ hero, vessel, deep, sc })
         : null;
-  }, [hero, deep, source, vessel, weights, conds]);
+  }, [hero, deep, source, vessel, sc, weights]);
 
   const toggleSet = (set, key, setter) => {
     const next = new Set(set);
@@ -110,6 +134,19 @@ export default function Optimizer() {
               <option key={h} value={i}>{h}</option>
             ))}
           </select>
+          <select
+            style={{ marginTop: 8 }}
+            value={level}
+            onChange={(e) => setLevel(+e.target.value)}
+            aria-label="Character level"
+          >
+            {LEVELS.map((l) => (
+              <option key={l} value={l}>Level {l}</option>
+            ))}
+          </select>
+          <p className="onote">
+            {STAT_NAMES.map((n, i) => `${n} ${stats[i]}`).join(" · ")}
+          </p>
         </div>
 
         <div className="panel">
@@ -149,17 +186,58 @@ export default function Optimizer() {
         </div>
 
         <div className="panel">
-          <p className="ptitle">Your damage type</p>
-          <div className="chips" role="group" aria-label="Damage elements">
-            {CHANNELS.map((ch, i) => (
-              <button key={ch.key} type="button" className="chip"
-                aria-pressed={elements.has(ch.key)}
-                onClick={() => toggleSet(elements, ch.key, setElements)}>
-                {ch.label}
-              </button>
+          <p className="ptitle">Your damage</p>
+          <select
+            value={wepClass}
+            onChange={(e) => { setWepClass(+e.target.value); setWeaponId(0); }}
+            aria-label="Weapon class"
+          >
+            <option value={0}>No weapon — pick elements manually</option>
+            {WEP_TYPES.map(([k, name]) => (
+              <option key={k} value={k}>{name}</option>
             ))}
-          </div>
-          {!weights.some((w) => w) && <p className="onote">Pick at least one element.</p>}
+          </select>
+          {wepClass !== 0 && (
+            <select
+              style={{ marginTop: 8 }}
+              value={weaponId}
+              onChange={(e) => setWeaponId(+e.target.value)}
+              aria-label="Weapon"
+            >
+              <option value={0}>Pick a weapon…</option>
+              {classWeapons.map((w) => (
+                <option key={w[0]} value={w[0]}>{w[1]}</option>
+              ))}
+            </select>
+          )}
+          {weapon ? (
+            <p className="onote">
+              AR at these stats:{" "}
+              {weaponAR(weapon, stats)
+                .map((a, e) => (a > 0 ? `${CHANNELS[e].label} ${Math.round(a)}` : null))
+                .filter(Boolean)
+                .join(" · ")}
+              . Stat relics (Str/Dex/Int/Fai/Arc) are valued through this weapon's
+              scaling.
+            </p>
+          ) : (
+            <>
+              <div className="chips" role="group" aria-label="Damage elements" style={{ marginTop: 8 }}>
+                {CHANNELS.map((ch) => (
+                  <button key={ch.key} type="button" className="chip"
+                    aria-pressed={elements.has(ch.key)}
+                    onClick={() => toggleSet(elements, ch.key, setElements)}>
+                    {ch.label}
+                  </button>
+                ))}
+              </div>
+              {!weights.some((w) => w) && <p className="onote">Pick at least one element.</p>}
+              <p className="onote">
+                Pick your weapon above to value attribute relics (Dexterity +3 …)
+                through its real scaling.
+              </p>
+            </>
+          )}
         </div>
 
         <div className="panel">
@@ -229,7 +307,16 @@ export default function Optimizer() {
                 {CHANNELS.map((ch, i) =>
                   weights[i] ? `${ch.label} ×${result.prod[i].toFixed(3)}` : null
                 ).filter(Boolean).join(" · ")}{" "}
-                (score averages your selected elements)
+                ({weapon ? "weighted by this weapon's AR split" : "score averages your selected elements"})
+              </p>
+            )}
+            {weapon && result.statDelta.some((d) => d) && (
+              <p className="onote">
+                Attribute bonuses in this build:{" "}
+                {STAT_NAMES.map((n, i) =>
+                  result.statDelta[i] ? `+${result.statDelta[i]} ${n}` : null
+                ).filter(Boolean).join(", ")}{" "}
+                — valued through {weapon[1]}'s scaling at your level-{level} stats.
               </p>
             )}
 
@@ -240,7 +327,7 @@ export default function Optimizer() {
                       <h3>Relic {i + 1} <span className="osub">any Grand Scene relic</span></h3>
                       <ul>
                         {rel.map((eff, j) => (
-                          <EffectLine key={j} eff={eff} weights={weights} conds={conds} />
+                          <EffectLine key={j} eff={eff} sc={sc} />
                         ))}
                         {rel.length === 0 && <li className="onote">free slot — nothing helps further</li>}
                       </ul>
@@ -256,7 +343,7 @@ export default function Optimizer() {
                       <ul>
                         {rel
                           ? rel[4].map((a, j) => (
-                              <EffectLine key={j} eff={makeEffect(a)} weights={weights} conds={conds} />
+                              <EffectLine key={j} eff={makeEffect(a)} sc={sc} />
                             ))
                           : <li className="onote">no damage gain available — any {COLOR_NAME[slotColors[i]]} relic works here</li>}
                       </ul>
@@ -294,8 +381,14 @@ export default function Optimizer() {
                 "Named relics" searches fixed-effect relics that fit the selected vessel's slot
                 colors. Conditional buffs
                 (initial attack, guard counters, weapon-count setups…) only count when you enable
-                their condition. Flat attack bonuses, status-buildup scaling, and script-driven
-                buffs without param data are not scored.
+                their condition. With a weapon selected, attribute relics (Strength, Dexterity,
+                Intelligence, Faith, Arcane) are valued through the game's real attack-rating
+                math — the weapon's scaling grades, its <code>CalcCorrectGraph</code> curves, and
+                your Nightfarer's stats at the chosen level (<code>HeroStatusParam</code>) — so
+                Dexterity on a dexterity-scaling weapon raises the score exactly as much as the
+                AR formula says, with diminishing returns past the curves' soft caps. Weapon
+                values are the listed rarity's unreinforced numbers. Flat attack bonuses,
+                status-buildup scaling, and script-driven buffs without param data are not scored.
               </p>
             </details>
           </>
