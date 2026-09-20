@@ -48,6 +48,8 @@ const attachNames = names("AttachEffectParam.json");
 const standNames = names("AntiqueStandParam.json");
 
 const antique = parseParam("EquipParamAntique.param.xml");
+const weapons = parseParam("EquipParamWeapon.param.xml");
+const saNames = names("SwordArtsParam.json");
 const attach = parseParam("AttachEffectParam.param.xml");
 const table = parseParam("AttachEffectTableParam.param.xml");
 const stand = parseParam("AntiqueStandParam.param.xml");
@@ -175,6 +177,31 @@ function spInstances(rootId) {
   return out;
 }
 
+// ---- Ash of War / skill effects: which weapon classes can trigger them ----
+// Nightreign weapons carry fixed skills (EquipParamWeapon.swordArtsParamId), so
+// a skill buff applies only to the weapon classes whose weapons have that
+// skill. Effects named "[AoW] <skill>…" are matched to skills by name.
+const skillWeps = new Map(); // normalized skill name -> Set(wepType)
+for (const w of weapons.rows) {
+  const said = +(w.swordArtsParamId ?? weapons.defaults.swordArtsParamId ?? 0);
+  const wt = +(w.wepType ?? weapons.defaults.wepType ?? 0);
+  if (!said || !wt) continue;
+  const key = (saNames.get(said) || "").replace(/^\[[^\]]*\]\s*/, "").trim().toLowerCase();
+  if (!key || /no skill/.test(key)) continue;
+  if (!skillWeps.has(key)) skillWeps.set(key, new Set());
+  skillWeps.get(key).add(wt);
+}
+const AOW_WEPS = {};
+for (const r of NR_EFFECTS) {
+  if (!r[5].includes("aow")) continue;
+  const m = r[1].match(/^\[AoW\]\s*([^-]+?)(?:\s*-\s*.*)?$/);
+  if (!m) continue;
+  const set = skillWeps.get(m[1].trim().toLowerCase());
+  // matched skill → its weapon classes; known skill name but no NR weapon
+  // carries it → empty list (unobtainable, applies to no weapon class)
+  AOW_WEPS[r[0]] = set ? [...set].sort((a, b) => a - b) : [];
+}
+
 // ---- attack-kind compatibility per SpEffect (for the weapon filter) ----
 // m = melee armaments only, r = ranged (bows/crossbows), c = spell casts,
 // n = not tied to the equipped armament's attacks (pots, knives, perfumes, roars).
@@ -197,7 +224,7 @@ for (const r of sp.rows) {
 }
 
 // ---- attach effects ----
-const attachOut = new Map(); // id -> [name, allowMask, instances, spIds]
+const attachOut = new Map(); // id -> [name, allowMask, instances, spIds, compat]
 function buildAttach(id) {
   if (attachOut.has(id)) return true;
   const a = attach.rows.find((r) => +r.id === id);
@@ -213,7 +240,13 @@ function buildAttach(id) {
   });
   const instances = [];
   for (const sid of spIds) instances.push(...spInstances(sid));
-  attachOut.set(id, [name, allowMask, instances, spIds]);
+  // roll-compatibility group: effects sharing a group (≠ -1) can't co-occur on
+  // one relic (100 = the Attack Power category, 900 = character-exclusive,
+  // 200/300 = starting-armament affinity/skill, 7xxxxxx = same-ability family)
+  const compat = a.compatibilityId !== undefined
+    ? +a.compatibilityId
+    : +(attach.defaults.compatibilityId ?? 100);
+  attachOut.set(id, [name, allowMask, instances, spIds, compat]);
   return true;
 }
 
@@ -289,6 +322,9 @@ export const NR_VESSELS = ${JSON.stringify(VESSELS)};
 // attack-kind restriction per SpEffect id (m melee / r ranged / c spell casts /
 // n not-armament-attack). Absent = applies regardless of armament.
 export const NR_SP_KIND = ${JSON.stringify(SP_KIND)};
+// Ash of War / skill effects: weapon classes whose fixed skill triggers them
+// ([] = no Nightreign weapon carries the skill). Absent = not an AoW effect.
+export const NR_AOW_WEPS = ${JSON.stringify(AOW_WEPS)};
 `;
 fs.writeFileSync(path.join(import.meta.dirname, "../src/relicdata.js"), out);
 console.log(

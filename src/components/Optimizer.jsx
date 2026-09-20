@@ -42,7 +42,8 @@ export default function Optimizer() {
   const [vesselId, setVesselId] = useState(null);
   const [elements, setElements] = useState(() => new Set(["phys"]));
   const [wepType, setWepType] = useState(0);
-  const [condsOn, setCondsOn] = useState(() => new Set());
+  // conditions are assumed active by default — this tracks the ones opted OUT
+  const [condsOff, setCondsOff] = useState(() => new Set());
   const [baseDmg, setBaseDmg] = useState(1000);
 
   const heroVessels = useMemo(() => VESSELS.filter((v) => v.hero === hero), [hero]);
@@ -68,14 +69,15 @@ export default function Optimizer() {
   }, [deep]);
 
   const conds = useMemo(() => {
-    const s = new Set(condsOn);
+    const s = new Set();
+    for (const c of condList) if (!condsOff.has(c.id)) s.add(c.id);
     if (wepType) {
       NR_COND_WEP.forEach((w, i) => {
         if (w === wepType) s.add(i);
       });
     }
     return s;
-  }, [condsOn, wepType]);
+  }, [condList, condsOff, wepType]);
 
   const result = useMemo(() => {
     if (!weights.some((w) => w)) return null;
@@ -173,24 +175,32 @@ export default function Optimizer() {
 
         <div className="panel">
           <p className="ptitle">
-            Count conditional buffs
-            {condsOn.size > 0 && (
-              <button className="pclear" type="button" onClick={() => setCondsOn(new Set())}>
-                clear
-              </button>
-            )}
+            Buff conditions
+            <button className="pclear" type="button"
+              onClick={() =>
+                setCondsOff(
+                  condsOff.size < condList.length
+                    ? new Set(condList.map((c) => c.id))
+                    : new Set()
+                )
+              }>
+              {condsOff.size < condList.length ? "uncheck all" : "check all"}
+            </button>
           </p>
-          <div className="checklist" role="group" aria-label="Conditions to include">
+          <div className="checklist" role="group" aria-label="Conditions assumed active">
             {condList.map((c) => (
               <label key={c.id}>
-                <input type="checkbox" checked={condsOn.has(c.id)}
-                  onChange={() => toggleSet(condsOn, c.id, setCondsOn)} />
+                <input type="checkbox" checked={!condsOff.has(c.id)}
+                  onChange={() => toggleSet(condsOff, c.id, setCondsOff)} />
                 {c.label}
               </label>
             ))}
           </div>
           <p className="onote">
-            Unchecked conditions are treated as inactive and their buffs score ×1.
+            Checked conditions are assumed to proc, so their buffs count at full value
+            (e.g. Improved Initial Standard Attack = ×1.15 per relic); unchecked ones
+            score ×1. These describe the hit you're optimizing — for the truest number,
+            keep only conditions that can apply to the same attack.
           </p>
         </div>
       </aside>
@@ -274,11 +284,15 @@ export default function Optimizer() {
                 (physical / magic / fire / lightning / holy attack rate × attack power rate) are
                 combined multiplicatively, after applying the engine's <code>spCategory</code>{" "}
                 stacking rules — exclusive groups keep one effect, "highest wins" groups keep the
-                top priority, and duplicate refresh-type effects count once. A relic can carry an
-                effect once, so a build can hold at most three copies of the same effect. "Best
-                possible rolls" searches the random-relic effect pool ({deep ? "Deep" : "standard"}{" "}
-                Scene relics — any effect can appear on any color); "Named relics" searches
-                fixed-effect relics that fit the selected vessel's slot colors. Conditional buffs
+                top priority, and duplicate refresh-type effects count once. Suggested rolls obey
+                the game's relic-generation rules (<code>compatibilityId</code>): effects sharing a
+                compatibility group — the Attack Power category, character-exclusive effects,
+                starting-armament affinity or skill changes, or tiers of the same ability — can
+                never roll together on one relic, so a build holds at most three of a group, one
+                per relic. "Best possible rolls" searches the random-relic effect pool
+                ({deep ? "Deep" : "standard"} Scene relics — any effect can appear on any color);
+                "Named relics" searches fixed-effect relics that fit the selected vessel's slot
+                colors. Conditional buffs
                 (initial attack, guard counters, weapon-count setups…) only count when you enable
                 their condition. Flat attack bonuses, status-buildup scaling, and script-driven
                 buffs without param data are not scored.

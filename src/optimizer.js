@@ -21,8 +21,8 @@ export const VESSELS = NR_VESSELS.map(([id, hero, name, slots, deepSlots]) => ({
 
 // One equippable relic-effect line.
 export function makeEffect(attachId) {
-  const [name, allowMask, instances, spIds] = NR_ATTACH[attachId];
-  return { attachId, name, allowMask, instances, spIds };
+  const [name, allowMask, instances, spIds, compat] = NR_ATTACH[attachId];
+  return { attachId, name, allowMask, instances, spIds, compat };
 }
 
 // Standalone weighted multiplier of one effect under a scenario (no stacking).
@@ -132,36 +132,57 @@ export function poolCandidates({ hero, deep, weights, conds }) {
   return out;
 }
 
-// Best possible rolled build: 3 relics × 3 effect lines, same effect at most
-// once per relic (so ≤3 copies total). Greedy on marginal gain — exact for
-// independent multiplicative effects, and group rules only ever make marginal
-// gains smaller, so re-evaluating each pick handles them.
-export function optimizeRolled({ hero, deep, weights, conds, slots = 9, maxCopies = 3 }) {
+// Roll-legality: effects sharing a compatibility group (compat ≠ -1) can never
+// roll together on ONE relic (the game's rule — e.g. only one Attack Power
+// category effect per relic), and a relic can't roll the same effect twice.
+// Across a 3-relic build that caps any group (and any single effect) at 3.
+const rollKey = (eff) => (eff.compat !== -1 ? "c" + eff.compat : "a" + eff.attachId);
+
+// Best possible rolled build: 3 relics × 3 effect lines under the roll rules.
+// Greedy on marginal gain — exact for independent multiplicative effects, and
+// group rules only ever make marginal gains smaller, so re-evaluating each
+// pick handles them.
+export function optimizeRolled({ hero, deep, weights, conds, slots = 9 }) {
   const cands = poolCandidates({ hero, deep, weights, conds });
   const picks = [];
-  const copies = new Map();
+  const keyCount = new Map(); // rollKey -> picked count (≤ 3: one per relic)
+  const copies = new Map(); // attachId -> picked count (≤ 3)
   for (let i = 0; i < slots; i++) {
     let best = null, bestGain = 1.0001;
     const base = evaluate(picks, weights, conds).score;
     for (const c of cands) {
-      if ((copies.get(c.attachId) || 0) >= maxCopies) continue;
+      if ((keyCount.get(rollKey(c)) || 0) >= 3) continue;
+      if ((copies.get(c.attachId) || 0) >= 3) continue;
       const gain = evaluate([...picks, c], weights, conds).score / base;
       if (gain > bestGain) { bestGain = gain; best = c; }
     }
     if (!best) break;
     picks.push(best);
+    keyCount.set(rollKey(best), (keyCount.get(rollKey(best)) || 0) + 1);
     copies.set(best.attachId, (copies.get(best.attachId) || 0) + 1);
   }
-  // distribute into 3 relics, copies of the same effect on different relics
+  // Distribute into 3 relics: members of one compatibility group (or copies of
+  // one effect) always land on different relics. Groups sized ≤3 with ≤9 picks
+  // always admit such an assignment (largest groups first, round-robin).
   const relics = [[], [], []];
-  const sorted = [...picks].sort(
-    (a, b) => effectValue(b, weights, conds) - effectValue(a, weights, conds)
-  );
-  for (const eff of sorted) {
-    const target = relics
-      .filter((r) => r.length < 3 && !r.some((e) => e.attachId === eff.attachId))
-      .sort((a, b) => a.length - b.length)[0];
-    if (target) target.push(eff);
+  const groups = new Map();
+  for (const eff of picks) {
+    const k = rollKey(eff);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(eff);
+  }
+  const ordered = [...groups.values()].sort((a, b) => b.length - a.length);
+  for (const members of ordered) {
+    const sorted = [...members].sort(
+      (a, b) => effectValue(b, weights, conds) - effectValue(a, weights, conds)
+    );
+    for (const eff of sorted) {
+      const target = relics
+        .filter((r) => r.length < 3 &&
+          !r.some((e) => rollKey(e) === rollKey(eff) || e.attachId === eff.attachId))
+        .sort((a, b) => a.length - b.length)[0];
+      if (target) target.push(eff);
+    }
   }
   return { relics, ...evaluate(picks, weights, conds), effects: picks };
 }

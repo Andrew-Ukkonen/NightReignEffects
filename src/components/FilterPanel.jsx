@@ -51,7 +51,7 @@ export default function FilterPanel({ filters, counts, onChange, collapsible }) 
         </p>
         <Checklist
           label="Filter by weapon type"
-          items={[{ key: "*", label: "Any weapon" }, ...WEP_TYPES.map(([k, name]) => ({ key: k, label: name }))]}
+          items={WEP_TYPES.map(([k, name]) => ({ key: k, label: name }))}
           selected={weps}
           counts={counts.weps}
           onToggle={(k) => onChange({ weps: toggle(weps, k) })}

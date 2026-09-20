@@ -1,5 +1,5 @@
 import { NR_EFFECTS, NR_WEPTYPES } from "./data.js";
-import { NR_SP_KIND } from "./relicdata.js";
+import { NR_SP_KIND, NR_AOW_WEPS } from "./relicdata.js";
 
 export const VERDICTS = {
   self:    { label: "Stacks with itself", cls: "v-self" },
@@ -139,10 +139,11 @@ export function passes(r, f, skip) {
   if (skip !== "v" && f.verdicts.size && !f.verdicts.has(r.v)) return false;
   if (skip !== "t" && f.types?.size && !r.types.some((t) => f.types.has(t))) return false;
   if (skip !== "w" && f.weps.size) {
+    const aow = NR_AOW_WEPS[r.id]; // skill buffs: only the classes with that skill
     let ok = false;
     for (const w of f.weps) {
-      if (w === "*") {
-        if (r.weps === "*") { ok = true; break; }
+      if (aow) {
+        if (aow.includes(w)) { ok = true; break; }
       } else if (r.weps === "*") {
         // untagged player buff: include if it can apply to this weapon class
         if (kindAllows(NR_SP_KIND[r.id], w)) { ok = true; break; }

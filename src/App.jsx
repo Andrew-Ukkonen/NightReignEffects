@@ -4,7 +4,8 @@ import EffectsTable from "./components/EffectsTable.jsx";
 import EffectCards from "./components/EffectCards.jsx";
 import RulesPanel from "./components/RulesPanel.jsx";
 import Optimizer from "./components/Optimizer.jsx";
-import { ROWS, passes, groupRows } from "./model.js";
+import { ROWS, passes, groupRows, kindAllows, WEP_TYPES } from "./model.js";
+import { NR_SP_KIND, NR_AOW_WEPS } from "./relicdata.js";
 import { useMediaQuery } from "./hooks.js";
 
 const PAGE = 400;
@@ -47,8 +48,12 @@ export default function App() {
       if (passes(r, f, "s")) for (const s of r.srcs) srcs[s] = (srcs[s] || 0) + 1;
       if (passes(r, f, "t")) for (const t of r.types) types[t] = (types[t] || 0) + 1;
       if (passes(r, f, "w")) {
-        if (r.weps === "*") weps["*"] = (weps["*"] || 0) + 1;
-        else for (const w of r.weps) weps[w] = (weps[w] || 0) + 1;
+        const aow = NR_AOW_WEPS[r.id];
+        if (aow) for (const w of aow) weps[w] = (weps[w] || 0) + 1;
+        else if (r.weps === "*") {
+          for (const [w] of WEP_TYPES)
+            if (kindAllows(NR_SP_KIND[r.id], w)) weps[w] = (weps[w] || 0) + 1;
+        } else for (const w of r.weps) weps[w] = (weps[w] || 0) + 1;
       }
     }
     return { verdicts, weps, srcs, types };
@@ -141,8 +146,12 @@ export default function App() {
               weapon-class conditions on relic/passive effects (<code>AttachEffectFilterParam</code>,
               decoded against the game's weapon-class values), and <code>wepTypeTrigger</code> ("3+
               of type equipped" relics). Player buffs with no weapon condition — most relic, item,
-              and spell effects — are marked <i>any weapon</i> and appear under the "Any weapon"
-              filter option; enemy, world, and internal effects match no weapon filter. Relic
+              and spell effects — are marked <i>any weapon</i>; selecting a weapon type shows its
+              tagged effects, the skill buffs of skills found on that weapon class
+              (<code>SwordArtsParam</code> via <code>EquipParamWeapon</code>), and every any-weapon
+              buff that can apply to it (melee-only, ranged-only, and spell-cast-only buffs are
+              hidden where they can't work). Enemy, world, and internal effects match no weapon
+              filter. Relic
               sourcing is traced through <code>EquipParamAntique</code> effect pools, so an effect
               can carry both Relic and Weapon-passive tags when both grant it. Duration ∞ means the
               effect lasts until removed by script or death. Value strings under each effect name
