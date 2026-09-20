@@ -1,11 +1,11 @@
 import { useState } from "react";
 import Checklist from "./Checklist.jsx";
-import { VERDICTS, SOURCES, WEP_TYPES } from "../model.js";
+import { VERDICTS, SOURCES, WEP_TYPES, TYPES } from "../model.js";
 
 export default function FilterPanel({ filters, counts, onChange, collapsible }) {
-  const { query, verdicts, weps, srcs } = filters;
+  const { query, verdicts, weps, srcs, types } = filters;
   const [open, setOpen] = useState(false);
-  const nActive = verdicts.size + weps.size + srcs.size;
+  const nActive = verdicts.size + weps.size + srcs.size + types.size;
 
   const toggle = (set, key) => {
     const next = new Set(set);
@@ -55,6 +55,25 @@ export default function FilterPanel({ filters, counts, onChange, collapsible }) 
           selected={weps}
           counts={counts.weps}
           onToggle={(k) => onChange({ weps: toggle(weps, k) })}
+        />
+      </div>
+
+      <div className="panel">
+        <p className="ptitle">
+          Effect type
+          {types.size > 0 && (
+            <button className="pclear" type="button" onClick={() => onChange({ types: new Set() })}>
+              clear
+            </button>
+          )}
+        </p>
+        <Checklist
+          short
+          label="Filter by effect type"
+          items={Object.entries(TYPES).map(([k, name]) => ({ key: k, label: name }))}
+          selected={types}
+          counts={counts.types}
+          onToggle={(k) => onChange({ types: toggle(types, k) })}
         />
       </div>
 

@@ -3,7 +3,8 @@ import FilterPanel from "./components/FilterPanel.jsx";
 import EffectsTable from "./components/EffectsTable.jsx";
 import EffectCards from "./components/EffectCards.jsx";
 import RulesPanel from "./components/RulesPanel.jsx";
-import { ROWS, passes } from "./model.js";
+import Optimizer from "./components/Optimizer.jsx";
+import { ROWS, passes, groupRows } from "./model.js";
 import { useMediaQuery } from "./hooks.js";
 
 const PAGE = 400;
@@ -14,9 +15,11 @@ export default function App() {
     verdicts: new Set(),
     weps: new Set(),
     srcs: new Set(),
+    types: new Set(),
     groupCat: null,
   });
   const [limit, setLimit] = useState(PAGE);
+  const [view, setView] = useState("effects"); // effects | optimizer
   const boxRef = useRef(null);
   const isMobile = useMediaQuery("(max-width: 780px)");
 
@@ -38,16 +41,17 @@ export default function App() {
 
   // Facet counts ignore their own facet so options stay discoverable.
   const counts = useMemo(() => {
-    const verdicts = {}, weps = {}, srcs = {};
+    const verdicts = {}, weps = {}, srcs = {}, types = {};
     for (const r of ROWS) {
       if (passes(r, f, "v")) verdicts[r.v] = (verdicts[r.v] || 0) + 1;
       if (passes(r, f, "s")) for (const s of r.srcs) srcs[s] = (srcs[s] || 0) + 1;
+      if (passes(r, f, "t")) for (const t of r.types) types[t] = (types[t] || 0) + 1;
       if (passes(r, f, "w")) {
         if (r.weps === "*") weps["*"] = (weps["*"] || 0) + 1;
         else for (const w of r.weps) weps[w] = (weps[w] || 0) + 1;
       }
     }
-    return { verdicts, weps, srcs };
+    return { verdicts, weps, srcs, types };
   }, [f]);
 
   function updateFilters(patch) {
@@ -62,16 +66,34 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: reduce ? "auto" : "smooth" });
   }
 
-  const shown = filtered.slice(0, limit);
+  const groups = useMemo(() => groupRows(filtered), [filtered]);
+  const shownGroups = groups.slice(0, limit);
+  const shownCount = shownGroups.reduce((n, g) => n + g.members.length, 0);
   const wepNote = !f.weps.size
     ? ""
-    : f.weps.has("*")
-      ? " — effects tied to the selected weapon types first, then any-weapon buffs"
-      : " — only effects tied to the selected weapon types (check “Any weapon” to include unrestricted buffs)";
+    : " — effects tied to the selected weapon types first, then every buff that can apply to them (melee-only, spell-only, and non-armament buffs are hidden where they can't work)";
 
   return (
     <div className="wrap">
       <h1>Nightreign Buff Stacking</h1>
+      <nav className="tabs" aria-label="Views">
+        <button type="button" className="tab" aria-pressed={view === "effects"}
+          onClick={() => setView("effects")}>Effects</button>
+        <button type="button" className="tab" aria-pressed={view === "optimizer"}
+          onClick={() => setView("optimizer")}>Relic Optimizer</button>
+      </nav>
+      {view === "optimizer" && (
+        <>
+          <p className="sub">
+            Finds the three-relic loadout with the biggest damage multiplier for your Nightfarer,
+            using the game's own effect values and <b>spCategory</b> stacking rules — buffs that
+            share an exclusivity group don't double-count.
+          </p>
+          <Optimizer />
+        </>
+      )}
+      {view === "effects" && (
+      <>
       <p className="sub">
         Every named special effect in Elden Ring Nightreign's <b>SpEffectParam</b> table (game
         version on disk, decoded 2026-09-18), with the engine field that decides stacking:{" "}
@@ -97,13 +119,13 @@ export default function App() {
             </div>
           )}
           <p className="count" aria-live="polite">
-            Showing {shown.length.toLocaleString()} of {filtered.length.toLocaleString()} effects
-            ({ROWS.length.toLocaleString()} named total){wepNote}
+            Showing {shownCount.toLocaleString()} of {filtered.length.toLocaleString()} effects
+            in {shownGroups.length.toLocaleString()} rows ({ROWS.length.toLocaleString()} named total){wepNote}
           </p>
           {isMobile
-            ? <EffectCards rows={shown} onPickCategory={pickCategory} />
-            : <EffectsTable rows={shown} onPickCategory={pickCategory} boxRef={boxRef} />}
-          {shown.length < filtered.length && (
+            ? <EffectCards groups={shownGroups} onPickCategory={pickCategory} />
+            : <EffectsTable groups={shownGroups} onPickCategory={pickCategory} boxRef={boxRef} />}
+          {shownGroups.length < groups.length && (
             <button className="more" type="button" onClick={() => setLimit(limit + PAGE)}>
               Show more
             </button>
@@ -138,6 +160,8 @@ export default function App() {
 
         <RulesPanel />
       </div>
+      </>
+      )}
     </div>
   );
 }
