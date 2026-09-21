@@ -363,7 +363,6 @@ export function optimizeFixed({ hero, vessel, deep, sc }) {
 // (sc.stateConds), so "Critical hit" counts crit buffs, "Initial standard
 // attack" counts initial-attack buffs, and neither leaks into the other.
 export function damageByAttackType(effects, sc) {
-  if (!sc.weapon) return [];
   const buildConds = new Set();
   for (const e of effects)
     for (const [, , , comps] of e.instances)
@@ -373,7 +372,7 @@ export function damageByAttackType(effects, sc) {
     const visible =
       t.kind === "n"
         ? t.condIds.some((c) => buildConds.has(c))
-        : t.kind === "*" || kindAllows(t.kind, sc.weapon[2]);
+        : t.kind === "*" || !sc.weapon || kindAllows(t.kind, sc.weapon[2]);
     if (!visible) continue;
     const conds = new Set([...sc.stateConds, ...t.condIds]);
     const r = evaluate(effects, { ...sc, conds, attackKind: t.kind });

@@ -107,23 +107,22 @@ export default function Optimizer() {
         ? ATTACK_TYPES.filter(
             (t) => t.kind === "*" || t.kind === "n" || kindAllows(t.kind, weapon[2])
           )
-        : [],
+        : ATTACK_TYPES,
     [weapon]
   );
-  const atkType = atkOptions.find((t) => t.label === atkLabel) || atkOptions[0] || null;
+  const atkType = atkOptions.find((t) => t.label === atkLabel) || atkOptions[0];
 
-  const sc = useMemo(() => {
-    let objective, attackKind = null;
-    if (weapon && atkType) {
-      objective = new Set([...conds, ...atkType.condIds]);
-      attackKind = atkType.kind;
-    } else {
-      // manual mode: assume every attack-kind buff can proc (old behavior)
-      objective = new Set(conds);
-      NR_COND_ATK.forEach((isAtk, i) => { if (isAtk) objective.add(i); });
-    }
-    return { weights, conds: objective, stateConds: conds, weapon, stats, attackKind };
-  }, [weights, conds, weapon, stats, atkType]);
+  const sc = useMemo(
+    () => ({
+      weights,
+      conds: new Set([...conds, ...atkType.condIds]),
+      stateConds: conds,
+      weapon,
+      stats,
+      attackKind: atkType.kind,
+    }),
+    [weights, conds, weapon, stats, atkType]
+  );
 
   const result = useMemo(() => {
     if (!weights.some((w) => w)) return null;
@@ -232,28 +231,26 @@ export default function Optimizer() {
               ))}
             </select>
           )}
+          <select
+            style={{ marginTop: 8 }}
+            value={atkType.label}
+            onChange={(e) => setAtkLabel(e.target.value)}
+            aria-label="Optimize for attack type"
+          >
+            {atkOptions.map((t) => (
+              <option key={t.label} value={t.label}>Optimize for: {t.label}</option>
+            ))}
+          </select>
           {weapon ? (
-            <>
-              <select
-                style={{ marginTop: 8 }}
-                value={atkType ? atkType.label : ""}
-                onChange={(e) => setAtkLabel(e.target.value)}
-                aria-label="Optimize for attack type"
-              >
-                {atkOptions.map((t) => (
-                  <option key={t.label} value={t.label}>Optimize for: {t.label}</option>
-                ))}
-              </select>
-              <p className="onote">
-                AR at these stats:{" "}
-                {weaponAR(weapon, stats)
-                  .map((a, e) => (a > 0 ? `${CHANNELS[e].label} ${Math.round(a)}` : null))
-                  .filter(Boolean)
-                  .join(" · ")}
-                . Stat relics (Str/Dex/Int/Fai/Arc) are valued through this weapon's
-                scaling.
-              </p>
-            </>
+            <p className="onote">
+              AR at these stats:{" "}
+              {weaponAR(weapon, stats)
+                .map((a, e) => (a > 0 ? `${CHANNELS[e].label} ${Math.round(a)}` : null))
+                .filter(Boolean)
+                .join(" · ")}
+              . Stat relics (Str/Dex/Int/Fai/Arc) are valued through this weapon's
+              scaling.
+            </p>
           ) : (
             <>
               <div className="chips" role="group" aria-label="Damage elements" style={{ marginTop: 8 }}>
@@ -354,33 +351,6 @@ export default function Optimizer() {
               </p>
             )}
 
-            {weapon && (
-              <div className="atkbox">
-                <p className="rulehead">Damage by attack type</p>
-                <table className="atktable">
-                  <thead>
-                    <tr><th>Attack type</th><th>Multiplier</th><th>Output</th></tr>
-                  </thead>
-                  <tbody>
-                    {damageByAttackType(result.effects, sc).map((r) => (
-                      <tr key={r.label}
-                        className={atkType && r.label === atkType.label ? "atk-active" : undefined}>
-                        <td>{r.label}{atkType && r.label === atkType.label ? " ◆" : ""}</td>
-                        <td className="num">×{r.score.toFixed(3)}</td>
-                        <td className="num">{Math.round(baseDmg * r.score).toLocaleString()}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <p className="onote">
-                  Each row multiplies the base-hit value by the buffs that apply to that kind
-                  of hit (plus your checked state conditions). ◆ marks the hit the build was
-                  optimized for. "Output" assumes the same {baseDmg.toLocaleString()} base for
-                  every row — a real crit or charged attack has its own higher base damage.
-                </p>
-              </div>
-            )}
-
             <div className="optrelics">
               {source === "rolled"
                 ? result.relics.map((rel, i) => (
@@ -410,6 +380,31 @@ export default function Optimizer() {
                       </ul>
                     </section>
                   ))}
+            </div>
+
+            <div className="atkbox">
+              <p className="rulehead">Damage by attack type</p>
+              <table className="atktable">
+                <thead>
+                  <tr><th>Attack type</th><th>Multiplier</th><th>Output</th></tr>
+                </thead>
+                <tbody>
+                  {damageByAttackType(result.effects, sc).map((r) => (
+                    <tr key={r.label}
+                      className={r.label === atkType.label ? "atk-active" : undefined}>
+                      <td>{r.label}{r.label === atkType.label ? " ◆" : ""}</td>
+                      <td className="num">×{r.score.toFixed(3)}</td>
+                      <td className="num">{Math.round(baseDmg * r.score).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="onote">
+                Each row multiplies the base-hit value by the buffs that apply to that kind
+                of hit (plus your checked state conditions). ◆ marks the hit the build was
+                optimized for. "Output" assumes the same {baseDmg.toLocaleString()} base for
+                every row — a real crit or charged attack has its own higher base damage.
+              </p>
             </div>
 
             {result.dropped.length > 0 && (
