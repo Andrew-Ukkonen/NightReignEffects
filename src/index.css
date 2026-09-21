@@ -316,6 +316,18 @@ tr.variant td.name { padding-left: 31px; }
 .oneeds { display: block; font-size: 12px; color: var(--v-refresh); }
 .odropped { margin: 8px 0 0; padding-left: 18px; }
 .odropped li { margin-bottom: 3px; }
+.atkbox { margin-top: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 13px 15px; }
+.atkbox .rulehead { margin-bottom: 8px; }
+.atktable { min-width: 0; width: auto; border-collapse: collapse; font-size: 14px; }
+.atktable th {
+  position: static; padding: 4px 18px 6px 0; font-size: 11px; background: none;
+}
+.atktable td { padding: 4px 18px 4px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 35%, transparent); }
+.atktable tr:last-child td { border-bottom: none; }
+.atktable tr.atk-active td { color: var(--gold); font-weight: 700; }
+.atktable tr.atk-active td.num { color: var(--gold); }
+.atkbox .onote { max-width: 72ch; }
+
 .slotdots { display: flex; align-items: center; gap: 5px; margin-top: 8px; }
 .slotdot {
   display: inline-block; width: 12px; height: 12px; border-radius: 50%; flex: none;

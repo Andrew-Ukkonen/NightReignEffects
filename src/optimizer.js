@@ -1,10 +1,38 @@
 import {
   NR_ATTACH, NR_POOL_NORMAL, NR_POOL_DEEP, NR_RELICS, NR_VESSELS,
   NR_CONDS, NR_HEROES, NR_COLORS,
-  NR_WEAPONS, NR_CALC, NR_AEC, NR_HERO_STATS,
+  NR_WEAPONS, NR_CALC, NR_AEC, NR_HERO_STATS, NR_SP_KIND,
 } from "./relicdata.js";
-import { NR_SP_KIND } from "./relicdata.js";
 import { ROWS, kindAllows } from "./model.js";
+
+// The kinds of hits a build can be measured against. `conds` are the condition
+// labels that hit satisfies; `kind` gates which restricted effects apply to it
+// (m melee armament, r ranged armament, c spell cast, n item attack,
+// * armament skill — follows the weapon).
+export const ATTACK_TYPES = [
+  { label: "Standard attack", conds: ["melee attacks"], kind: "m" },
+  { label: "Initial standard attack", conds: ["initial standard attack", "melee attacks"], kind: "m" },
+  { label: "Charged attack", conds: ["charged attacks", "melee attacks"], kind: "m" },
+  { label: "Jump attack", conds: ["jump attacks", "melee attacks"], kind: "m" },
+  { label: "Dash attack", conds: ["dash attacks", "melee attacks"], kind: "m" },
+  { label: "Rolling attack", conds: ["rolling attacks", "melee attacks"], kind: "m" },
+  { label: "Guard counter", conds: ["guard counters", "melee attacks"], kind: "m" },
+  { label: "Chain attack finisher", conds: ["chain attack finishers", "melee attacks"], kind: "m" },
+  { label: "Critical hit", conds: ["critical hits", "melee attacks"], kind: "m" },
+  { label: "Ranged weapon attack", conds: ["ranged weapon attacks"], kind: "r" },
+  { label: "Skill attack", conds: ["skill attacks"], kind: "*" },
+  { label: "Charged spell / skill", conds: ["charged spells & skills", "skill attacks"], kind: "*" },
+  { label: "Sorcery cast", conds: ["sorceries"], kind: "c" },
+  { label: "Incantation cast", conds: ["incantations"], kind: "c" },
+  { label: "Roar & breath attack", conds: ["roar & breath attacks"], kind: "*" },
+  { label: "Throwing pot", conds: ["throwing pots"], kind: "n" },
+  { label: "Throwing knife", conds: ["throwing knives"], kind: "n" },
+  { label: "Perfume art", conds: ["perfuming arts"], kind: "n" },
+  { label: "Glintstone / gravity stone", conds: ["glintstone & gravity stones"], kind: "n" },
+].map((t) => ({
+  ...t,
+  condIds: t.conds.map((c) => NR_CONDS.indexOf(c)).filter((i) => i > 0),
+}));
 
 export { NR_HEROES, NR_COLORS, NR_CONDS, NR_WEAPONS };
 export const CHANNELS = [
@@ -83,8 +111,10 @@ export function weaponWeights(weapon, stats) {
 }
 
 // Per-element damage ratio from attribute bonuses: AR(base+delta)/AR(base).
+// Item attacks (pots, knives, perfumes) don't swing the weapon, so they don't
+// gain from weapon scaling.
 function statRatios(sc, delta) {
-  if (!sc.weapon || !delta.some((d) => d)) return null;
+  if (!sc.weapon || sc.attackKind === "n" || !delta.some((d) => d)) return null;
   const base = weaponAR(sc.weapon, sc.stats);
   const boosted = weaponAR(sc.weapon, sc.stats.map((v, i) => v + delta[i]));
   return base.map((b, e) => (b > 0 ? boosted[e] / b : 1));
@@ -102,12 +132,21 @@ function condEnabled(condId, conds) {
   return condId === 0 || conds.has(condId);
 }
 
+// Does a kind-restricted effect instance apply to the hit being scored?
+function instAllowed(spId, sc) {
+  const k = NR_SP_KIND[spId];
+  if (!k) return true;
+  const rk = sc.attackKind;
+  if (!rk || rk === "*") return sc.weapon ? kindAllows(k, sc.weapon[2]) : k !== "n";
+  return k === rk;
+}
+
 function channelProducts(instances, sc) {
   const prod = [1, 1, 1, 1, 1];
   for (const [spId, , , comps] of instances) {
-    // with a weapon chosen, buffs that can't apply to its class score nothing
-    // (melee-only on a bow, pot/perfume buffs on a weapon swing, …)
-    if (sc.weapon && !kindAllows(NR_SP_KIND[spId], sc.weapon[2])) continue;
+    // buffs that can't apply to this hit score nothing (melee-only on a bow,
+    // pot buffs on a weapon swing, spell-school buffs on a melee hit, …)
+    if (!instAllowed(spId, sc)) continue;
     for (const [bits, mult, cond] of comps) {
       if (!condEnabled(cond, sc.conds)) continue;
       CHANNELS.forEach((ch, i) => {
@@ -317,6 +356,30 @@ export function optimizeFixed({ hero, vessel, deep, sc }) {
   }
   const effects = effectsOf(chosen);
   return { relics: chosen, ...evaluate(effects, sc), effects };
+}
+
+// Score a build against every applicable kind of hit. Each row activates only
+// its own attack-kind conditions on top of the checked state conditions
+// (sc.stateConds), so "Critical hit" counts crit buffs, "Initial standard
+// attack" counts initial-attack buffs, and neither leaks into the other.
+export function damageByAttackType(effects, sc) {
+  if (!sc.weapon) return [];
+  const buildConds = new Set();
+  for (const e of effects)
+    for (const [, , , comps] of e.instances)
+      for (const [, , c] of comps) if (c) buildConds.add(c);
+  const rows = [];
+  for (const t of ATTACK_TYPES) {
+    const visible =
+      t.kind === "n"
+        ? t.condIds.some((c) => buildConds.has(c))
+        : t.kind === "*" || kindAllows(t.kind, sc.weapon[2]);
+    if (!visible) continue;
+    const conds = new Set([...sc.stateConds, ...t.condIds]);
+    const r = evaluate(effects, { ...sc, conds, attackKind: t.kind });
+    rows.push({ label: t.label, kind: t.kind, condIds: t.condIds, score: r.score });
+  }
+  return rows;
 }
 
 // Conditions that actually appear on candidate damage effects, for the UI.

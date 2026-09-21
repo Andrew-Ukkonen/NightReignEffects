@@ -98,6 +98,23 @@ const condId = (label, wep = 0) => {
   return i;
 };
 
+// known scripted-state conditions worth naming (from pool-effect survey)
+const STATE_LABEL = {
+  367: "critical hits",
+  2110: "enemy afflicted by the matching status",
+  2108: "fighting alongside allies",
+};
+
+// Conditions that describe a KIND of attack (one hit satisfies at most a few
+// of these) rather than a state that can hold during any attack.
+const ATTACK_KIND_LABELS = new Set([
+  "initial standard attack", "charged attacks", "jump attacks", "guard counters",
+  "chain attack finishers", "ranged weapon attacks", "roar & breath attacks",
+  "throwing pots", "throwing knives", "perfuming arts", "glintstone & gravity stones",
+  "charged spells & skills", "skill attacks", "dash attacks", "rolling attacks",
+  "melee attacks", "critical hits", "sorceries", "incantations",
+]);
+
 // channel bits: 1 phys, 2 magic, 4 fire, 8 lightning, 16 holy
 const CH = { phys: 1, mag: 2, fir: 4, lit: 8, hol: 16 };
 const RATE_FIELDS = [
@@ -145,7 +162,9 @@ function rowComps(r, baseCond) {
   }
   if (labels.length) cond = condId(labels.join(" · "), condW);
   // damage fields gated by a scripted state (crits, vs-status, proximity…)
-  else if (cond === 0 && spVal(r, "stateInfo") !== 0) cond = condId("situational (effect-specific trigger)");
+  else if (cond === 0 && spVal(r, "stateInfo") !== 0) {
+    cond = condId(STATE_LABEL[spVal(r, "stateInfo")] || "situational (effect-specific trigger)");
+  }
   // merge channels with identical mult
   const byMult = new Map();
   for (const [rate, powerRate, bit] of RATE_FIELDS) {
@@ -403,6 +422,8 @@ export const NR_COLORS = ["Red", "Blue", "Yellow", "Green"]; // relicColor 0-3; 
 export const NR_CONDS = ${JSON.stringify(conds)};
 // weapon-type id each condition depends on (0 = none) — aligned with NR_CONDS
 export const NR_COND_WEP = ${JSON.stringify(condWep)};
+// 1 = the condition is an attack kind (crit, initial attack…), 0 = a state
+export const NR_COND_ATK = ${JSON.stringify(conds.map((c) => (ATTACK_KIND_LABELS.has(c) ? 1 : 0)))};
 // attach effects: id -> [name, heroAllowMask, [[spId, spCategory, catPriority, [[channelBits, mult, condId]…]]…], [spEffectIds]]
 export const NR_ATTACH = ${JSON.stringify(Object.fromEntries(attachOut))};
 // [attachEffectId, rollWeight]

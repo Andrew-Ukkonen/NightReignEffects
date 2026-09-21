@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import {
   NR_HEROES, NR_COLORS, NR_CONDS, NR_WEAPONS, CHANNELS, STAT_NAMES, VESSELS, ROW_BY_ID,
-  optimizeRolled, optimizeFixed, relevantConds, makeEffect, effectValue,
-  heroBaseStats, weaponWeights, weaponAR,
+  ATTACK_TYPES, optimizeRolled, optimizeFixed, relevantConds, makeEffect, effectValue,
+  heroBaseStats, weaponWeights, weaponAR, damageByAttackType,
 } from "../optimizer.js";
-import { NR_COND_WEP } from "../relicdata.js";
-import { WEP_NAME, WEP_TYPES, cleanName } from "../model.js";
+import { NR_COND_WEP, NR_COND_ATK } from "../relicdata.js";
+import { WEP_NAME, WEP_TYPES, cleanName, kindAllows } from "../model.js";
 
 const COLOR_CLASS = ["c-red", "c-blue", "c-yellow", "c-green", "c-white"];
 const COLOR_NAME = [...NR_COLORS, "White (any)"];
@@ -74,8 +74,10 @@ export default function Optimizer() {
     [weapon, stats, elements]
   );
 
+  // checklist holds only STATE conditions; attack kinds live in the
+  // per-attack-type table and the "optimize for" selector
   const condList = useMemo(
-    () => relevantConds({ deep }).filter((c) => NR_COND_WEP[c.id] === 0),
+    () => relevantConds({ deep }).filter((c) => NR_COND_WEP[c.id] === 0 && !NR_COND_ATK[c.id]),
     [deep]
   );
   const wepOptions = useMemo(() => {
@@ -98,10 +100,30 @@ export default function Optimizer() {
     return s;
   }, [condList, condsOff, wepType]);
 
-  const sc = useMemo(
-    () => ({ weights, conds, weapon, stats }),
-    [weights, conds, weapon, stats]
+  const [atkLabel, setAtkLabel] = useState(null);
+  const atkOptions = useMemo(
+    () =>
+      weapon
+        ? ATTACK_TYPES.filter(
+            (t) => t.kind === "*" || t.kind === "n" || kindAllows(t.kind, weapon[2])
+          )
+        : [],
+    [weapon]
   );
+  const atkType = atkOptions.find((t) => t.label === atkLabel) || atkOptions[0] || null;
+
+  const sc = useMemo(() => {
+    let objective, attackKind = null;
+    if (weapon && atkType) {
+      objective = new Set([...conds, ...atkType.condIds]);
+      attackKind = atkType.kind;
+    } else {
+      // manual mode: assume every attack-kind buff can proc (old behavior)
+      objective = new Set(conds);
+      NR_COND_ATK.forEach((isAtk, i) => { if (isAtk) objective.add(i); });
+    }
+    return { weights, conds: objective, stateConds: conds, weapon, stats, attackKind };
+  }, [weights, conds, weapon, stats, atkType]);
 
   const result = useMemo(() => {
     if (!weights.some((w) => w)) return null;
@@ -211,15 +233,27 @@ export default function Optimizer() {
             </select>
           )}
           {weapon ? (
-            <p className="onote">
-              AR at these stats:{" "}
-              {weaponAR(weapon, stats)
-                .map((a, e) => (a > 0 ? `${CHANNELS[e].label} ${Math.round(a)}` : null))
-                .filter(Boolean)
-                .join(" · ")}
-              . Stat relics (Str/Dex/Int/Fai/Arc) are valued through this weapon's
-              scaling.
-            </p>
+            <>
+              <select
+                style={{ marginTop: 8 }}
+                value={atkType ? atkType.label : ""}
+                onChange={(e) => setAtkLabel(e.target.value)}
+                aria-label="Optimize for attack type"
+              >
+                {atkOptions.map((t) => (
+                  <option key={t.label} value={t.label}>Optimize for: {t.label}</option>
+                ))}
+              </select>
+              <p className="onote">
+                AR at these stats:{" "}
+                {weaponAR(weapon, stats)
+                  .map((a, e) => (a > 0 ? `${CHANNELS[e].label} ${Math.round(a)}` : null))
+                  .filter(Boolean)
+                  .join(" · ")}
+                . Stat relics (Str/Dex/Int/Fai/Arc) are valued through this weapon's
+                scaling.
+              </p>
+            </>
           ) : (
             <>
               <div className="chips" role="group" aria-label="Damage elements" style={{ marginTop: 8 }}>
@@ -318,6 +352,33 @@ export default function Optimizer() {
                 ).filter(Boolean).join(", ")}{" "}
                 — valued through {weapon[1]}'s scaling at your level-{level} stats.
               </p>
+            )}
+
+            {weapon && (
+              <div className="atkbox">
+                <p className="rulehead">Damage by attack type</p>
+                <table className="atktable">
+                  <thead>
+                    <tr><th>Attack type</th><th>Multiplier</th><th>Output</th></tr>
+                  </thead>
+                  <tbody>
+                    {damageByAttackType(result.effects, sc).map((r) => (
+                      <tr key={r.label}
+                        className={atkType && r.label === atkType.label ? "atk-active" : undefined}>
+                        <td>{r.label}{atkType && r.label === atkType.label ? " ◆" : ""}</td>
+                        <td className="num">×{r.score.toFixed(3)}</td>
+                        <td className="num">{Math.round(baseDmg * r.score).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="onote">
+                  Each row multiplies the base-hit value by the buffs that apply to that kind
+                  of hit (plus your checked state conditions). ◆ marks the hit the build was
+                  optimized for. "Output" assumes the same {baseDmg.toLocaleString()} base for
+                  every row — a real crit or charged attack has its own higher base damage.
+                </p>
+              </div>
             )}
 
             <div className="optrelics">
