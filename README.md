@@ -5,11 +5,15 @@ A filterable reference of every named special effect in Elden Ring Nightreign's
 (`spCategory`). Search by effect, weapon type, source, or stacking rule, and
 click any category number to see the full exclusivity group a buff belongs to.
 
-Also includes a **Relic Optimizer**: pick your Nightfarer, damage type, and
-which conditional buffs you can keep active, and it searches the relic effect
-pools (or the named fixed relics that fit a vessel's slot colors) for the
-three-relic loadout with the highest stacked damage multiplier, applying the
-game's spCategory stacking rules so conflicting buffs don't double-count.
+Also includes a **Relic Selector** (`#selector`): build each relic line by line
+from every effect the game can roll — normal Scene relics, Deep relics with
+their mandatory curses, or named fixed relics that fit the vessel's slot colors —
+and it flags anything that can't exist in-game (effects sharing a roll
+compatibility group, wrong pool, wrong color, other heroes' exclusives). It then
+simulates damage for your Nightfarer, weapon, and attack type, including the
+ailments you keep on the enemy (poison, rot, frostbite, sleep, madness) with an
+uptime per ailment, applying the game's spCategory stacking rules. "Fill empty
+lines with best damage" completes a loadout around the lines you've picked.
 
 Live site: https://andrew-ukkonen.github.io/NightReignEffects/
 

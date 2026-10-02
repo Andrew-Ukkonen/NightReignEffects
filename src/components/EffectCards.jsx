@@ -1,4 +1,4 @@
-import { VERDICTS, SOURCES, durText } from "../model.js";
+import { VERDICTS, SOURCES, durText, ruleNote } from "../model.js";
 import { WepCell } from "./EffectsTable.jsx";
 
 function Card({ r, onPickCategory }) {
@@ -14,6 +14,7 @@ function Card({ r, onPickCategory }) {
         {r.mod && <span className={r.mod.startsWith("scripted") ? "mod scripted" : "mod"}>{r.mod}</span>}
       </h3>
       {r.via && <span className="via">from: {r.via}</span>}
+      {r.rule && <span className="rulenote">{ruleNote(r.rule)}</span>}
       <div className="card-tags">
         {r.srcs.map((s) => <span key={s} className="stag">{SOURCES[s] || s}</span>)}
         <WepCell weps={r.weps} />
@@ -23,7 +24,7 @@ function Card({ r, onPickCategory }) {
           Category:{" "}
           {r.cat === 0
             ? "0"
-            : <button className="catbtn" type="button" onClick={() => onPickCategory(r.cat)}>{r.cat}</button>}
+            : <button className="catbtn" type="button" onClick={() => onPickCategory(r.cat, r.prio)}>{r.cat}</button>}
         </span>
         <span>Priority: {r.prio}</span>
       </div>

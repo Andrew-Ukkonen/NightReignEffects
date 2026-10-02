@@ -300,14 +300,25 @@ for (const t of table.rows) {
   const w = Math.max(+(t.chanceWeight ?? 0), +(t.chanceWeight_dlc ?? 0));
   tablesById.get(id).push([+t.attachEffectId, w]);
 }
+// Only weighted rows can roll (weight-0 rows are listed but disabled).
 function poolOf(tableId) {
-  const entries = (tablesById.get(tableId) || []).filter(([a]) => a > 0);
+  const entries = (tablesById.get(tableId) || []).filter(([a, w]) => a > 0 && w > 0);
   const out = [];
   for (const [aid, w] of entries) if (buildAttach(aid)) out.push([aid, w]);
   return out;
 }
-const POOL_NORMAL = poolOf(100);
-const POOL_DEEP = poolOf(2000000);
+// Random relics roll each effect line from a table (EquipParamAntique
+// attachEffectTableId_1..3). Current Scene relics use 110/210/310 — identical
+// content, a superset of the older 100/200/300.
+const POOL_NORMAL = poolOf(110);
+// Deep relics: a line rolls from 2100000 (= 2200000), or from 2000000 — the
+// Deep-exclusive tiers, whose lines always carry a curse from 3000000
+// (attachEffectTableId_curseN pairs with attachEffectTableId_N).
+const POOL_DEEP = [
+  ...poolOf(2100000),
+  ...poolOf(2000000).map(([aid, w]) => [aid, w, 1]),
+];
+const POOL_CURSE = poolOf(3000000);
 
 // ---- fixed relics ----
 const RELICS = [];
@@ -426,9 +437,11 @@ export const NR_COND_WEP = ${JSON.stringify(condWep)};
 export const NR_COND_ATK = ${JSON.stringify(conds.map((c) => (ATTACK_KIND_LABELS.has(c) ? 1 : 0)))};
 // attach effects: id -> [name, heroAllowMask, [[spId, spCategory, catPriority, [[channelBits, mult, condId]…]]…], [spEffectIds]]
 export const NR_ATTACH = ${JSON.stringify(Object.fromEntries(attachOut))};
-// [attachEffectId, rollWeight]
+// [attachEffectId, rollWeight] — NR_POOL_DEEP rows with a third element 1 are
+// Deep-exclusive lines that must be paired with a curse from NR_POOL_CURSE
 export const NR_POOL_NORMAL = ${JSON.stringify(POOL_NORMAL)};
 export const NR_POOL_DEEP = ${JSON.stringify(POOL_DEEP)};
+export const NR_POOL_CURSE = ${JSON.stringify(POOL_CURSE)};
 // fixed relics: [id, name, color, isDeep, [attachEffectIds]]
 export const NR_RELICS = ${JSON.stringify(RELICS)};
 // vessels: [id, heroIdx, name, [slot colors], [deep slot colors]]
@@ -450,5 +463,5 @@ export const NR_HERO_STATS = ${JSON.stringify(HERO_STATS)};
 `;
 fs.writeFileSync(path.join(import.meta.dirname, "../src/relicdata.js"), out);
 console.log(
-  `attach ${attachOut.size} | poolN ${POOL_NORMAL.length} | poolD ${POOL_DEEP.length} | relics ${RELICS.length} | vessels ${VESSELS.length} | conds ${conds.length} | ${(out.length / 1024).toFixed(0)}KB`
+  `attach ${attachOut.size} | poolN ${POOL_NORMAL.length} | poolD ${POOL_DEEP.length} | curses ${POOL_CURSE.length} | relics ${RELICS.length} | vessels ${VESSELS.length} | conds ${conds.length} | ${(out.length / 1024).toFixed(0)}KB`
 );

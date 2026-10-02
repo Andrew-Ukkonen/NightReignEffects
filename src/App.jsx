@@ -3,8 +3,8 @@ import FilterPanel from "./components/FilterPanel.jsx";
 import EffectsTable from "./components/EffectsTable.jsx";
 import EffectCards from "./components/EffectCards.jsx";
 import RulesPanel from "./components/RulesPanel.jsx";
-import Optimizer from "./components/Optimizer.jsx";
-import { ROWS, passes, groupRows, kindAllows, WEP_TYPES } from "./model.js";
+import RelicSelector from "./components/RelicSelector.jsx";
+import { ROWS, passes, groupRows, kindAllows, perPriority, WEP_TYPES } from "./model.js";
 import { NR_SP_KIND, NR_AOW_WEPS } from "./relicdata.js";
 import { useMediaQuery } from "./hooks.js";
 
@@ -18,9 +18,17 @@ export default function App() {
     srcs: new Set(),
     types: new Set(),
     groupCat: null,
+    groupPrio: null,
   });
   const [limit, setLimit] = useState(PAGE);
-  const [view, setView] = useState("effects"); // effects | optimizer
+  // effects | selector — mirrored in the URL hash so the selector can be linked
+  const [view, setViewState] = useState(() =>
+    window.location.hash === "#selector" ? "selector" : "effects"
+  );
+  const setView = (v) => {
+    setViewState(v);
+    window.history.replaceState(null, "", v === "selector" ? "#selector" : window.location.pathname);
+  };
   const boxRef = useRef(null);
   const isMobile = useMediaQuery("(max-width: 780px)");
 
@@ -65,8 +73,9 @@ export default function App() {
     boxRef.current?.scrollTo(0, 0);
   }
 
-  function pickCategory(cat) {
-    updateFilters({ groupCat: cat, query: "" });
+  // 200–299 groups are per priority: show only the slot the effect occupies
+  function pickCategory(cat, prio) {
+    updateFilters({ groupCat: cat, groupPrio: perPriority(cat) ? prio ?? null : null, query: "" });
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     window.scrollTo({ top: 0, behavior: reduce ? "auto" : "smooth" });
   }
@@ -84,17 +93,18 @@ export default function App() {
       <nav className="tabs" aria-label="Views">
         <button type="button" className="tab" aria-pressed={view === "effects"}
           onClick={() => setView("effects")}>Effects</button>
-        <button type="button" className="tab" aria-pressed={view === "optimizer"}
-          onClick={() => setView("optimizer")}>Relic Optimizer</button>
+        <button type="button" className="tab" aria-pressed={view === "selector"}
+          onClick={() => setView("selector")}>Relic Selector</button>
       </nav>
-      {view === "optimizer" && (
+      {view === "selector" && (
         <>
           <p className="sub">
-            Finds the three-relic loadout with the biggest damage multiplier for your Nightfarer,
-            using the game's own effect values and <b>spCategory</b> stacking rules — buffs that
-            share an exclusivity group don't double-count.
+            Build your relics line by line from every effect the game can roll — the selector only
+            lets you make relics that can really exist — then simulate the damage for your
+            Nightfarer, weapon, and the ailments you keep on the enemy, using the game's own
+            effect values and <b>spCategory</b> stacking rules.
           </p>
-          <Optimizer />
+          <RelicSelector />
         </>
       )}
       {view === "effects" && (
@@ -114,11 +124,12 @@ export default function App() {
           {filters.groupCat !== null && (
             <div className="groupnote">
               <span>
-                Showing exclusivity group: spCategory {filters.groupCat} — these{" "}
+                Showing exclusivity group: spCategory {filters.groupCat}
+                {filters.groupPrio != null ? `, priority ${filters.groupPrio}` : ""} — these{" "}
                 {filtered.length} effects share one slot
-                {filters.groupCat === 200 ? " per priority value" : ""}.
+                {perPriority(filters.groupCat) && filters.groupPrio == null ? " per priority value" : ""}.
               </span>
-              <button type="button" onClick={() => updateFilters({ groupCat: null })}>
+              <button type="button" onClick={() => updateFilters({ groupCat: null, groupPrio: null })}>
                 Clear group filter
               </button>
             </div>

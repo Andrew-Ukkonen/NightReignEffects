@@ -1,5 +1,6 @@
 import { NR_EFFECTS, NR_WEPTYPES } from "./data.js";
 import { NR_SP_KIND, NR_AOW_WEPS } from "./relicdata.js";
+import { NR_STACK_FIX } from "./stackdata.js";
 
 export const VERDICTS = {
   self:    { label: "Stacks with itself", cls: "v-self" },
@@ -8,6 +9,7 @@ export const VERDICTS = {
   excl:    { label: "Group-exclusive",    cls: "v-excl" },
   highest: { label: "Highest wins",       cls: "v-highest" },
   first:   { label: "First wins",         cls: "v-first" },
+  tier:    { label: "One tier at a time", cls: "v-tier" },
 };
 
 export const SOURCES = {
@@ -75,11 +77,37 @@ export function cleanName(name) {
   return m[1] ? `[${m[1]}] ${rest}` : rest;
 }
 
-export const ROWS = NR_EFFECTS.map((r) => ({
-  id: r[0], name: cleanName(r[1]), cat: r[2], prio: r[3], dur: r[4],
-  srcs: r[5], weps: r[6], via: r[7], mod: r[8] || "", v: verdict(r[2]),
-  types: classify(r[8], r[4]),
-}));
+// Rows that are only a trigger or a script flag take their stacking rule from
+// the row that carries the buff (see scripts/gen-stacking.mjs); `rule` records
+// where it came from and the row's own (inert) category.
+export const ROWS = NR_EFFECTS.map((r) => {
+  const fix = NR_STACK_FIX[r[0]];
+  const cat = fix ? fix[0] : r[2];
+  const prio = fix ? fix[1] : r[3];
+  return {
+    id: r[0], name: cleanName(r[1]), cat, prio, dur: r[4],
+    srcs: r[5], weps: r[6], via: r[7], mod: r[8] || "",
+    v: fix?.[3] === "ladder" ? "tier" : verdict(cat),
+    rule: fix ? { from: fix[2], how: fix[3], trigger: !!fix[4], ownCat: r[2], ownPrio: r[3] } : null,
+    types: classify(r[8], r[4]),
+  };
+});
+
+// Categories 200–299 hold one effect per categoryPriority value — distinct
+// priorities are separate slots (Pickled Turtle Neck / Silver / Gold Pickled
+// Fowl Foot are all cat 202 at priorities 212–214 and coexist).
+export const perPriority = (cat) => cat >= 200 && cat <= 299;
+
+export function ruleNote(rule) {
+  if (!rule) return null;
+  const own = `own row is a ${rule.ownCat === 0 ? "no-category" : "cat " + rule.ownCat} ${
+    rule.trigger ? "trigger" : "flag"}`;
+  if (rule.how === "ladder")
+    return `tier ladder from effect ${rule.from}: each trigger moves up one tier, only one tier is active, and extra copies of the source add nothing (${own})`;
+  if (rule.how === "name")
+    return `rule from same-named effect ${rule.from}, which carries the buff (${own})`;
+  return `rule from effect ${rule.from}, which carries the buff (${own})`;
+}
 
 export const WEP_TYPES = NR_WEPTYPES;
 export const WEP_NAME = Object.fromEntries(NR_WEPTYPES);
@@ -136,6 +164,7 @@ export function durText(d) {
 // ("v" rule chips, "w" weapons, "s" sources, "t" effect types)?
 export function passes(r, f, skip) {
   if (f.groupCat !== null && r.cat !== f.groupCat) return false;
+  if (f.groupPrio != null && r.prio !== f.groupPrio) return false;
   if (skip !== "v" && f.verdicts.size && !f.verdicts.has(r.v)) return false;
   if (skip !== "t" && f.types?.size && !r.types.some((t) => f.types.has(t))) return false;
   if (skip !== "w" && f.weps.size) {
