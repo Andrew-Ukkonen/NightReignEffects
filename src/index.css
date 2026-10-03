@@ -39,8 +39,12 @@ body {
   html, body, #root { height: 100%; }
   body { overflow: hidden; }
   .wrap { height: 100%; display: flex; flex-direction: column; }
-  .layout, .optlayout { flex: 1; min-height: 0; }
-  .side { position: static; max-height: 100%; overflow-y: auto; }
+  /* one definite-height row, so the columns' max-height: 100% resolves and
+     each column scrolls inside the viewport instead of overflowing it */
+  .layout, .optlayout { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  /* scoped so it beats the later base .side rule (calc(100vh - 40px) is taller
+     than the space left under the header, which cut off the sidebar's end) */
+  .layout .side, .optlayout .side { position: static; max-height: 100%; overflow-y: auto; }
   .main { display: flex; flex-direction: column; min-height: 0; height: 100%; }
   .tablebox { flex: 1; min-height: 0; }
   .optmain { overflow-y: auto; max-height: 100%; }
