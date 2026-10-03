@@ -391,3 +391,9 @@ tr.variant td.name { padding-left: 31px; }
 .uptime { display: flex; align-items: center; gap: 8px; width: 100%; font-size: 12px; color: var(--muted); }
 .uptime input { flex: 1; accent-color: var(--gold); }
 .uptime span { min-width: 82px; font-variant-numeric: tabular-nums; }
+
+.optrelic.attacking { border-color: var(--gold-dim); }
+.optrelic h3 .h3btns { margin-left: auto; display: flex; gap: 10px; white-space: nowrap; }
+.optrelic h3 .h3btns .pclear { margin-left: 0; }
+.pclear.on { color: var(--gold); }
+.optrelic > select + select { margin-top: 6px; }

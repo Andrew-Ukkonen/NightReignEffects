@@ -1,5 +1,6 @@
 import {
   NR_ATTACH, NR_POOL_NORMAL, NR_POOL_DEEP, NR_POOL_CURSE, NR_RELICS, NR_VESSELS,
+  NR_WEP_TABLES, NR_WEP_CUSTOM,
   NR_CONDS, NR_HEROES, NR_COLORS,
   NR_WEAPONS, NR_CALC, NR_AEC, NR_HERO_STATS, NR_SP_KIND,
 } from "./relicdata.js";
@@ -187,9 +188,22 @@ export function makeEffect(attachId) {
   return eff;
 }
 
+// HP-threshold conditions ("HP ≤ 40%", "HP ≥ 100%") are driven by the HP
+// slider (sc.hp, percent), not the checklist — they're mutually exclusive.
+export const HP_CONDS = new Map();
+NR_CONDS.forEach((label, id) => {
+  const m = label.match(/^HP ([≤≥]) ([\d.]+)%$/);
+  if (m) HP_CONDS.set(id, { below: m[1] === "≤", pct: +m[2] });
+});
+
 function condEnabled(cond, sc) {
   if (cond === 0) return true;
   if (cond >= STATUS_COND) return ((cond - STATUS_COND) & (sc.statusMask || 0)) !== 0;
+  const hp = HP_CONDS.get(cond);
+  if (hp) {
+    const cur = sc.hp ?? 100;
+    return hp.below ? cur <= hp.pct : cur >= hp.pct;
+  }
   return sc.conds.has(cond);
 }
 
@@ -485,13 +499,218 @@ export function validateSlot(slot, { hero, color, deepSlot, namedElsewhere }) {
   return v;
 }
 
+// ---- armaments (6 weapon slots: 3 per hand) ----
+// Every carried weapon's passives are active whether it's in hand or not.
+// A weapon's roll lines come from its drop row (NR_WEP_CUSTOM) or, as the game
+// does for most weapons, from its class group and rarity tier:
+//   Standard:      one passive line from 501{group}00{tier}00
+//   Deep of Night: a penalty line (610/620 by tier) + passive lines from 501…
+//                  and 505… (the same pool plus Deep-only stat lines)
+// Common weapons have no Deep roll; Legendaries carry only their fixed Weapon
+// Power. Class groups: torches 3, bows/crossbows/ballistae 6 (both seen on drop
+// rows); staffs 4 and seals 5 are inferred — groups 4–6 hold identical pools,
+// as do 0–2, so only the torch / ranged-or-catalyst / everything-else split
+// changes what can roll.
+export const RARITY = ["Common", "Uncommon", "Rare", "Legendary"];
+const PENALTY_TABLES = new Set([610000000, 620000000, 630000000]);
+const WEP_TABLE = new Map(
+  Object.entries(NR_WEP_TABLES).map(([t, l]) => [+t, new Map(l)])
+);
+const WEP_GROUP = { 87: 3, 51: 6, 53: 6, 55: 6, 56: 6, 57: 4, 61: 5 };
+const SELECTABLE = /^\[(Common|Uncommon|Rare|Legendary|Hero)\]/;
+export const ARMAMENTS = NR_WEAPONS.filter((w) => SELECTABLE.test(w[1]))
+  .sort((a, b) => a[1].replace(/^\[\w+\]\s*/, "").localeCompare(b[1].replace(/^\[\w+\]\s*/, "")));
+export const WEAPON_BY_ID = new Map(NR_WEAPONS.map((w) => [w[0], w]));
+
+export const emptyArm = () => ({ id: 0, std: [0], deep: [0, 0, 0] });
+
+// A roll = the table each line position draws from (positions without a table
+// don't exist on that weapon) + which positions are penalties.
+// Line positions are the same for every weapon: Standard [passive],
+// Deep of Night [passive, passive, penalty] — weapons with fewer lines (Common
+// weapons in Deep, Legendaries) simply lack some positions.
+function weaponRoll(weapon, deep) {
+  const custom = NR_WEP_CUSTOM[weapon[0] - (weapon[0] % 100)];
+  let std, dp;
+  if (custom) {
+    std = custom.slice(0, 3).filter(Boolean);
+    dp = custom.slice(3).filter(Boolean);
+  } else {
+    const rarity = weapon[7];
+    if (rarity > 2) return [];
+    const g = WEP_GROUP[weapon[2]] ?? 0;
+    const tbl = (p) => p + g * 100000 + rarity * 100;
+    std = [tbl(501000000)];
+    dp = rarity >= 1 ? [tbl(501000000), tbl(505000000), rarity === 1 ? 610000000 : 620000000] : [];
+  }
+  const use = deep && dp.length ? dp : std;
+  // penalty last, matching the in-game line order
+  return [...use.filter((t) => !PENALTY_TABLES.has(t)), ...use.filter((t) => PENALTY_TABLES.has(t))]
+    .filter((t) => WEP_TABLE.has(t));
+}
+
+// Every roll a dropped weapon can have, for slots with no weapon chosen yet.
+// Groups 0 / 3 / 4 stand for all seven (0–2 and 4–6 share pools).
+const GROUP_LABEL = { 0: "melee & shields", 3: "torches", 4: "bows & catalysts" };
+const ANY_ROLLS = { std: [], deep: [] };
+for (const g of [0, 3, 4]) {
+  for (const t of [0, 1, 2]) {
+    const tbl = (p) => p + g * 100000 + t * 100;
+    const meta = { g, t };
+    ANY_ROLLS.std.push({ ...meta, tables: [tbl(501000000)] });
+    ANY_ROLLS.deep.push({
+      ...meta,
+      tables: t === 0
+        ? [tbl(501000000)]
+        : [tbl(501000000), tbl(505000000), t === 1 ? 610000000 : 620000000],
+    });
+  }
+}
+for (const k of ["std", "deep"])
+  ANY_ROLLS[k] = ANY_ROLLS[k].filter((r) => r.tables.every((t) => WEP_TABLE.has(t)));
+
+// A class picked without a specific weapon narrows the rolls to its group.
+const canonGroup = (cls) => ({ 3: 3, 4: 4, 5: 4, 6: 4 })[WEP_GROUP[cls]] ?? 0;
+function armRolls(weapon, deep, cls = 0) {
+  if (weapon) return [{ tables: weaponRoll(weapon, deep) }];
+  const any = ANY_ROLLS[deep ? "deep" : "std"];
+  return cls ? any.filter((r) => r.g === canonGroup(cls)) : any;
+}
+
+// Line positions shown for a slot: [{ penalty }].
+export function armLines(weapon, deep) {
+  if (weapon) return weaponRoll(weapon, deep).map((t) => ({ penalty: PENALTY_TABLES.has(t) }));
+  return deep ? [{ penalty: false }, { penalty: false }, { penalty: true }] : [{ penalty: false }];
+}
+
+const armKey = (deep) => (deep ? "deep" : "std");
+// The chosen attach ids for each line position in the current mode.
+export function armPicks(arm, deep) {
+  const lines = armLines(WEAPON_BY_ID.get(arm.id), deep);
+  const picks = arm[armKey(deep)] || [];
+  return lines.map((l, i) => picks[i] || 0);
+}
+export function setArmPick(arm, deep, i, a) {
+  const k = armKey(deep);
+  const cur = [...(arm[k] || [])];
+  cur[i] = a;
+  return { ...arm, [k]: cur };
+}
+
+export function armEffects(arm, deep) {
+  const w = WEAPON_BY_ID.get(arm.id);
+  const out = w && w[8] ? [makeEffect(w[8])] : [];
+  for (const a of armPicks(arm, deep)) if (a) out.push(makeEffect(a));
+  return out;
+}
+
+const fits = (roll, picks) =>
+  picks.every((a, i) => !a || (roll.tables[i] && WEP_TABLE.get(roll.tables[i]).has(a)));
+
+// Is there a roll for this weapon (or any weapon) carrying all these picks?
+export function weaponCanRoll(weapon, picks, deep) {
+  return armRolls(weapon, deep).some((r) => fits(r, picks));
+}
+
+// Why can't `eff` go on line `i` beside the other picks? (null = it can.)
+function armConflict(weapon, deep, picks, i, eff, hero, cls = 0) {
+  if (!(eff.allowMask & (1 << hero))) return "not available to " + NR_HEROES[hero];
+  for (let j = 0; j < picks.length; j++) {
+    if (j === i || !picks[j]) continue;
+    const other = makeEffect(picks[j]);
+    if (rollKey(other) === rollKey(eff))
+      return `can't share a weapon with ${cleanName(other.name)}`;
+  }
+  const rolls = armRolls(weapon, deep, cls);
+  const test = picks.map((a, j) => (j === i ? eff.attachId : a));
+  if (rolls.some((r) => fits(r, test))) return null;
+  if (weapon) return "can't roll on this weapon";
+  const alone = test.map((a, j) => (j === i ? a : 0));
+  return rolls.some((r) => fits(r, alone))
+    ? "no weapon rolls this together with your other passives"
+    : "can't roll on this line";
+}
+
+// Where an effect can roll on line i of an unspecified weapon: "Rare · torches".
+function rollsWhere(rolls, i, a) {
+  const hit = rolls.filter((r) => r.tables[i] && WEP_TABLE.get(r.tables[i]).has(a));
+  const tiers = [...new Set(hit.map((r) => r.t))].sort();
+  const groups = [...new Set(hit.map((r) => r.g))];
+  const rar = tiers.map((t) => RARITY[t]).join(" / ");
+  return groups.length === 3 ? rar : `${rar} · ${groups.map((g) => GROUP_LABEL[g]).join(", ")}`;
+}
+
+// Effects that can appear on line i of this slot (any roll), as attach ids.
+function lineUnion(weapon, deep, i, cls = 0) {
+  const ids = new Set();
+  for (const r of armRolls(weapon, deep, cls))
+    if (r.tables[i]) for (const a of WEP_TABLE.get(r.tables[i]).keys()) ids.add(a);
+  return ids;
+}
+
+export function armLineOptions(arm, lineIdx, { hero, deep, sc }) {
+  const w = WEAPON_BY_ID.get(arm.id) || null;
+  const picks = armPicks(arm, deep);
+  const rolls = armRolls(w, deep, arm.cls);
+  const out = [];
+  for (const a of lineUnion(w, deep, lineIdx, arm.cls)) {
+    const eff = makeEffect(a);
+    if (!(eff.allowMask & (1 << hero))) continue;
+    out.push({
+      id: a,
+      name: cleanName(eff.name),
+      value: effectValue(eff, sc),
+      tag: w ? null : rollsWhere(rolls, lineIdx, a),
+      conflict: armConflict(w, deep, picks, lineIdx, eff, hero, arm.cls),
+    });
+  }
+  return out;
+}
+
+// Does every roll that fits these picks have a penalty on line i?
+function penaltyRequired(weapon, deep, picks, i, cls = 0) {
+  if (!picks.some((a, j) => a && j !== i)) return false;
+  const ok = armRolls(weapon, deep, cls).filter((r) => fits(r, picks));
+  return ok.length > 0 && ok.every((r) => r.tables[i] && PENALTY_TABLES.has(r.tables[i]));
+}
+
+// Validate one armament. Returns { arm: [msg], lines: [[msg]…] }.
+export function validateArm(arm, { hero, deep }) {
+  const w = WEAPON_BY_ID.get(arm.id) || null;
+  const lines = armLines(w, deep);
+  const picks = armPicks(arm, deep);
+  const v = { arm: [], lines: lines.map(() => []) };
+  if (w) {
+    const owner = NR_HEROES.find((h) => w[1].includes(h));
+    if (/^\[Hero\]/.test(w[1]) && owner && owner !== NR_HEROES[hero])
+      v.arm.push(`${owner}'s starting armament — ${NR_HEROES[hero]} can't start with it`);
+    const stored = arm[armKey(deep)] || [];
+    if (stored.slice(lines.length).some(Boolean))
+      v.arm.push("this weapon has fewer passive lines than you've picked");
+  }
+  lines.forEach((l, i) => {
+    if (!picks[i]) {
+      if (l.penalty && penaltyRequired(w, deep, picks, i, arm.cls))
+        v.lines[i].push("Deep of Night weapons always roll a penalty — pick one");
+      return;
+    }
+    const prefix = picks.map((a, j) => (j < i ? a : 0));
+    const why = armConflict(w, deep, prefix, i, makeEffect(picks[i]), hero, arm.cls);
+    if (why) v.lines[i].push(why);
+  });
+  return v;
+}
+
 // Fill every empty rolled line with the best damage roll available, keeping
 // every line already chosen. Greedy on marginal gain: each step tries every
-// legal (slot, effect) placement against the whole loadout, so stacking rules,
-// roll-legality and stat diminishing returns are all respected. Deep-exclusive
-// effects come with the least harmful curse.
-export function fillBest(slots, { hero, deepSlots, sc, statuses }) {
+// legal (slot, effect) placement against the whole loadout — relic lines and
+// weapon passive lines alike — so stacking rules, roll-legality and stat
+// diminishing returns are all respected. Weapon slots with no weapon chosen take
+// any passive some dropped weapon can roll. Deep-exclusive relic effects come
+// with the least harmful curse; Deep weapons get the least harmful penalty.
+export function fillBest(slots, { hero, deepSlots, sc, statuses, arms = [] }) {
   const next = slots.map((s) => ({ ...s, lines: s.lines.map((l) => ({ ...l })) }));
+  let nextArms = arms.map((a) => ({ ...a }));
   const active = next.map((s, i) => i < 3 || deepSlots);
   const cands = (deepSlot) =>
     [...(deepSlot ? POOL_DEEP : POOL_NORMAL).keys()]
@@ -501,13 +720,34 @@ export function fillBest(slots, { hero, deepSlots, sc, statuses }) {
   const candN = cands(false), candD = deepSlots ? cands(true) : [];
   const curses = [...POOL_CURSE.keys()].map(makeEffect)
     .sort((a, b) => simulate([b], sc, statuses).expected - simulate([a], sc, statuses).expected);
-  const all = () => next.filter((_, i) => active[i]).flatMap(slotEffects);
+  const all = () => [
+    ...next.filter((_, i) => active[i]).flatMap(slotEffects),
+    ...nextArms.flatMap((a) => armEffects(a, deepSlots)),
+  ];
   const value = (effs) => simulate(effs, sc, statuses).expected;
+  const helps = new Map();
+  const useful = (eff) => {
+    if (!helps.has(eff.attachId)) helps.set(eff.attachId, value([eff]) > 1.0001);
+    return helps.get(eff.attachId);
+  };
 
   for (;;) {
     const current = all();
     const base = value(current);
     let best = null, bestGain = 1.0001;
+    nextArms.forEach((arm, ai) => {
+      const w = WEAPON_BY_ID.get(arm.id) || null;
+      const lines = armLines(w, deepSlots);
+      const picks = armPicks(arm, deepSlots);
+      const li = lines.findIndex((l, i) => !l.penalty && !picks[i]);
+      if (li === -1) return;
+      for (const a of lineUnion(w, deepSlots, li, arm.cls)) {
+        const eff = makeEffect(a);
+        if (!useful(eff) || armConflict(w, deepSlots, picks, li, eff, hero, arm.cls)) continue;
+        const gain = value([...current, eff]) / base;
+        if (gain > bestGain) { bestGain = gain; best = { arm: ai, li, a }; }
+      }
+    });
     next.forEach((slot, si) => {
       if (!active[si] || slot.named) return;
       const li = slot.lines.findIndex((l) => !l.a);
@@ -529,21 +769,46 @@ export function fillBest(slots, { hero, deepSlots, sc, statuses }) {
       }
     });
     if (!best) break;
-    next[best.si].lines[best.li] = { a: best.a, c: best.c };
+    if (best.arm != null) nextArms[best.arm] = setArmPick(nextArms[best.arm], deepSlots, best.li, best.a);
+    else next[best.si].lines[best.li] = { a: best.a, c: best.c };
   }
-  return next;
+
+  // Deep weapons that now carry passives need their penalty line
+  nextArms = nextArms.map((arm) => {
+    const w = WEAPON_BY_ID.get(arm.id) || null;
+    const lines = armLines(w, deepSlots);
+    let picks = armPicks(arm, deepSlots);
+    lines.forEach((l, i) => {
+      if (!l.penalty || picks[i] || !penaltyRequired(w, deepSlots, picks, i, arm.cls)) return;
+      const current = all();
+      let pick = 0, pickVal = -Infinity;
+      for (const a of lineUnion(w, deepSlots, i, arm.cls)) {
+        const eff = makeEffect(a);
+        if (armConflict(w, deepSlots, picks, i, eff, hero, arm.cls)) continue;
+        const v = value([...current, eff]);
+        if (v > pickVal) { pickVal = v; pick = a; }
+      }
+      if (pick) { arm = setArmPick(arm, deepSlots, i, pick); picks = armPicks(arm, deepSlots); }
+    });
+    return arm;
+  });
+  return { slots: next, arms: nextArms };
 }
 
 // Conditions that actually appear on candidate damage effects, for the UI.
-// Ailment conditions are left out — the status panel drives those.
+// Ailment and HP conditions are left out — the status panel and HP slider
+// drive those.
 export function relevantConds({ deep }) {
   const ids = new Set();
   const scan = (attachId) => {
     for (const [, , , comps] of makeEffect(attachId).instances)
-      for (const [, , cond] of comps) if (cond && cond < STATUS_COND) ids.add(cond);
+      for (const [, , cond] of comps)
+        if (cond && cond < STATUS_COND && !HP_CONDS.has(cond)) ids.add(cond);
   };
   for (const a of POOL_NORMAL.keys()) scan(a);
   if (deep) for (const a of [...POOL_DEEP.keys(), ...POOL_CURSE.keys()]) scan(a);
   for (const [, , , isDeep, attachIds] of NR_RELICS) if (!isDeep) attachIds.forEach(scan);
+  for (const t of WEP_TABLE.values()) for (const a of t.keys()) scan(a);
+  for (const w of ARMAMENTS) if (w[8]) scan(w[8]);
   return [...ids].sort((a, b) => a - b).map((id) => ({ id, label: NR_CONDS[id] }));
 }

@@ -3,8 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 const fmt = (v) => "×" + v.toFixed(3);
 const valClass = (v) => (v > 1.0001 ? "pv-up" : v < 0.9999 ? "pv-down" : "");
 
-// Searchable picker for one relic line. options: [{ id, name, value, conflict,
-// curse }]; options with a conflict are listed but can't be picked.
+// Searchable picker for one relic or weapon line. options: [{ id, name, value,
+// conflict, curse, tag }]; options with a conflict are listed but can't be picked.
 export default function EffectPicker({ value, options, onPick, placeholder, label }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -114,6 +114,7 @@ export default function EffectPicker({ value, options, onPick, placeholder, labe
                   )}
                 </span>
                 {o.curse && <span className="picktag">Deep-exclusive · rolls with a curse</span>}
+                {o.tag && <span className="picktag">rolls on: {o.tag}</span>}
                 {o.conflict && <span className="pickwhy">{o.conflict}</span>}
               </li>
             ))}

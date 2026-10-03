@@ -5,7 +5,9 @@
 //   node scripts/gen-relicdata.mjs <paramXmlDir> <namesJsonDir>
 //
 // paramXmlDir must contain: EquipParamAntique.param.xml, AttachEffectParam.param.xml,
-//   AttachEffectTableParam.param.xml, AntiqueStandParam.param.xml, SpEffectParam.param.xml
+//   AttachEffectTableParam.param.xml, AntiqueStandParam.param.xml, SpEffectParam.param.xml,
+//   EquipParamWeapon, EquipParamCustomWeapon, CalcCorrectGraph, AttackElementCorrectParam,
+//   HeroStatusParam (.param.xml)
 // namesJsonDir must contain: EquipParamAntique.json, AttachEffectParam.json,
 //   AntiqueStandParam.json
 import fs from "node:fs";
@@ -53,6 +55,7 @@ const saNames = names("SwordArtsParam.json");
 const wepNames = names("EquipParamWeapon.json");
 const calcGraph = parseParam("CalcCorrectGraph.param.xml");
 const aecParam = parseParam("AttackElementCorrectParam.param.xml");
+const customWeapons = parseParam("EquipParamCustomWeapon.param.xml");
 const heroStatus = parseParam("HeroStatusParam.param.xml");
 
 const val = (p, r, f) => (r[f] !== undefined ? +r[f] : +(p.defaults[f] ?? 0));
@@ -160,7 +163,12 @@ function rowComps(r, baseCond) {
     labels.push(trig > 0 ? `${trig}+ ${wnames}s equipped` : `wielding ${wnames}`);
     condW = weps[0];
   }
+  // HP thresholds: conditionHp = active at or below N% HP, conditionHpRate =
+  // at or above N% (100 = full HP). Labels are parsed back by the app's HP slider.
+  const hpLow = spVal(r, "conditionHp"), hpHigh = spVal(r, "conditionHpRate");
   if (labels.length) cond = condId(labels.join(" · "), condW);
+  else if (cond === 0 && hpLow > 0) cond = condId(`HP ≤ ${hpLow}%`);
+  else if (cond === 0 && hpHigh > 0) cond = condId(`HP ≥ ${hpHigh}%`);
   // damage fields gated by a scripted state (crits, vs-status, proximity…)
   else if (cond === 0 && spVal(r, "stateInfo") !== 0) {
     cond = condId(STATE_LABEL[spVal(r, "stateInfo")] || "situational (effect-specific trigger)");
@@ -320,6 +328,31 @@ const POOL_DEEP = [
 ];
 const POOL_CURSE = poolOf(3000000);
 
+// ---- weapon passives ----
+// Dropped weapons are EquipParamCustomWeapon rows: a base weapon plus up to six
+// effect tables. Lines 1–3 roll in Standard expeditions; lines 4–6 are the
+// Deep of Night roll (a mandatory penalty table 610/620/630 plus two passive
+// lines). Most rows leave the tables unset and the game picks them from the
+// weapon's class group and rarity: 501{group}00{tier}00 (Common/Uncommon/Rare =
+// Potency 1/2/3), 505… = the same pool plus Deep-only stat lines, 601… = a
+// Nightfarer's starting armament, 602/603 = its Deep extras.
+const WEP_TABLES = {};
+for (const t of tablesById.keys()) {
+  if (!/^(501|505|601|602|603|610|620|630)\d{6}$/.test(String(t))) continue;
+  const p = poolOf(t);
+  if (p.length) WEP_TABLES[t] = p;
+}
+// Rows that name their tables explicitly, keyed by base weapon id (affinity
+// variants step by 100; reinforcement adds to the low digits).
+const WEP_CUSTOM = {};
+for (const r of customWeapons.rows) {
+  if (val(customWeapons, r, "disableParam_NT") || val(customWeapons, r, "isCursed")) continue;
+  const ts = [1, 2, 3, 4, 5, 6].map((i) => val(customWeapons, r, "attachEffectTableId_" + i));
+  if (!ts.some((t) => t > 0) || !ts.every((t) => t <= 0 || WEP_TABLES[t])) continue;
+  const tw = val(customWeapons, r, "targetWeaponId");
+  WEP_CUSTOM[tw - (tw % 100)] = ts.map((t) => (t > 0 ? t : 0));
+}
+
 // ---- fixed relics ----
 const RELICS = [];
 for (const r of antique.rows) {
@@ -367,7 +400,10 @@ for (const w of weapons.rows) {
   const aecId = val(weapons, w, "attackElementCorrectId");
   ct.forEach((c) => usedCalc.add(c));
   usedAec.add(aecId);
-  WEAPONS.push([+w.id, name, wt, base, scal, ct, aecId]);
+  // fixed passive (Legendary "Weapon Power", unique weapons) — 0 = none
+  const fixedAttach = val(weapons, w, "attachEffectId");
+  const fixed = fixedAttach > 0 && buildAttach(fixedAttach) ? fixedAttach : 0;
+  WEAPONS.push([+w.id, name, wt, base, scal, ct, aecId, val(weapons, w, "rarity"), fixed]);
 }
 
 const CALC = {};
@@ -442,6 +478,10 @@ export const NR_ATTACH = ${JSON.stringify(Object.fromEntries(attachOut))};
 export const NR_POOL_NORMAL = ${JSON.stringify(POOL_NORMAL)};
 export const NR_POOL_DEEP = ${JSON.stringify(POOL_DEEP)};
 export const NR_POOL_CURSE = ${JSON.stringify(POOL_CURSE)};
+// weapon passive tables: tableId -> [[attachEffectId, rollWeight]…]
+export const NR_WEP_TABLES = ${JSON.stringify(WEP_TABLES)};
+// weapons whose drop row names its tables: base weaponId -> [table per line 1–6] (0 = none)
+export const NR_WEP_CUSTOM = ${JSON.stringify(WEP_CUSTOM)};
 // fixed relics: [id, name, color, isDeep, [attachEffectIds]]
 export const NR_RELICS = ${JSON.stringify(RELICS)};
 // vessels: [id, heroIdx, name, [slot colors], [deep slot colors]]
@@ -452,7 +492,7 @@ export const NR_SP_KIND = ${JSON.stringify(SP_KIND)};
 // Ash of War / skill effects: weapon classes whose fixed skill triggers them
 // ([] = no Nightreign weapon carries the skill). Absent = not an AoW effect.
 export const NR_AOW_WEPS = ${JSON.stringify(AOW_WEPS)};
-// weapons: [id, name, wepType, [base atk ×5 elements], [scaling% Str/Dex/Int/Fai/Arc], [CalcCorrectGraph id ×5], attackElementCorrectId]
+// weapons: [id, name, wepType, [base atk ×5 elements], [scaling% Str/Dex/Int/Fai/Arc], [CalcCorrectGraph id ×5], attackElementCorrectId, rarity 0–3, fixed attachEffectId (0 = none)]
 export const NR_WEAPONS = ${JSON.stringify(WEAPONS)};
 // CalcCorrectGraph: id -> [[stageMaxVal×5],[stageMaxGrowVal×5],[adjPt×5]]
 export const NR_CALC = ${JSON.stringify(CALC)};

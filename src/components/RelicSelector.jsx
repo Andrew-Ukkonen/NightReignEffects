@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
 import {
-  NR_HEROES, NR_COLORS, NR_WEAPONS, CHANNELS, STAT_NAMES, VESSELS, ROW_BY_ID,
+  NR_HEROES, NR_COLORS, NR_CONDS, CHANNELS, STAT_NAMES, VESSELS, ROW_BY_ID,
   ATTACK_TYPES, STATUSES, RELIC_BY_ID, relevantConds, makeEffect, effectValue, condLabel,
   heroBaseStats, weaponWeights, weaponAR, weaponStatusMask, damageByAttackType, simulate, evaluate,
   emptySlot, slotEffects, namedForSlot, lineOptions, curseOptions, validateSlot, fillBest,
-  POOL_DEEP,
+  POOL_DEEP, HP_CONDS, RARITY, ARMAMENTS, WEAPON_BY_ID, emptyArm, armLines, armPicks,
+  setArmPick, armEffects, armLineOptions, validateArm, weaponCanRoll,
 } from "../optimizer.js";
 import { NR_COND_WEP, NR_COND_ATK } from "../relicdata.js";
 import { WEP_NAME, WEP_TYPES, cleanName, kindAllows } from "../model.js";
@@ -17,6 +18,13 @@ const LEVELS = Array.from({ length: 15 }, (_, i) => i + 1);
 const SIZE_NAME = ["Empty", "Delicate", "Polished", "Grand"];
 
 const freshSlots = () => Array.from({ length: 6 }, emptySlot);
+const freshArms = () => Array.from({ length: 6 }, emptyArm);
+const ARM_LABEL = ["Right hand 1", "Right hand 2", "Right hand 3", "Left hand 1", "Left hand 2", "Left hand 3"];
+function normalizeArms(a) {
+  if (!Array.isArray(a) || a.length !== 6) return freshArms();
+  return a.map((x) => (x && typeof x.id === "number" ? x : emptyArm()));
+}
+const shortName = (w) => w[1].replace(/^\[[^\]]*\]\s*/, "");
 // Persisted loadouts from older versions may not match the current shape.
 function normalizeSlots(s) {
   if (!Array.isArray(s) || s.length !== 6) return freshSlots();
@@ -40,8 +48,13 @@ function effectDetails(eff, sc) {
     ...new Set(
       eff.instances.flatMap(([, , , comps]) =>
         comps
-          .filter(([, , c]) =>
-            c !== 0 && (c >= 1000 ? !((c - 1000) & sc.statusMask) : !sc.conds.has(c)))
+          .filter(([, , c]) => {
+            if (c === 0) return false;
+            if (c >= 1000) return !((c - 1000) & sc.statusMask);
+            const hp = HP_CONDS.get(c);
+            if (hp) return hp.below ? sc.hp > hp.pct : sc.hp < hp.pct;
+            return !sc.conds.has(c);
+          })
           .map(([, , c]) => condLabel(c))
       )
     ),
@@ -164,6 +177,97 @@ function SlotCard({ index, slot, color, deepSlot, hero, sc, validation, onChange
   );
 }
 
+function ArmCard({ index, arm, deep, hero, sc, validation, attacking, onAttack, onChange }) {
+  const weapon = WEAPON_BY_ID.get(arm.id) || null;
+  const cls = weapon ? weapon[2] : arm.cls || 0;
+  const classWeapons = cls ? ARMAMENTS.filter((w) => w[2] === cls) : [];
+  const lines = armLines(weapon, deep);
+  const picks = armPicks(arm, deep);
+  const bad = validation.arm.length + validation.lines.flat().length;
+  const fixed = weapon && weapon[8] ? makeEffect(weapon[8]) : null;
+  const rarity = weapon ? (/^\[Hero\]/.test(weapon[1]) ? "Starting armament" : RARITY[weapon[7]]) : "Any weapon";
+  const anyPicks = picks.some(Boolean);
+  // the weapon choice keeps your passives; weapons that can't roll them say so
+  const pickWeapon = (id) => onChange({ ...arm, cls, id });
+  return (
+    <section className={"optrelic" + (bad ? " invalid" : "") + (attacking ? " attacking" : "")}>
+      <h3>
+        {ARM_LABEL[index]}
+        <span className="osub">{rarity}{weapon && ` · ${WEP_NAME[weapon[2]] || "type " + weapon[2]}`}</span>
+        <span className="h3btns">
+          {weapon && (
+            <button type="button" className={"pclear" + (attacking ? " on" : "")} onClick={onAttack}
+              aria-pressed={attacking} title="Simulate attacks with this weapon">
+              {attacking ? "attacking ◆" : "attack with"}
+            </button>
+          )}
+          <button type="button" className="pclear" onClick={() => onChange(emptyArm())}>clear</button>
+        </span>
+      </h3>
+      <select value={cls} aria-label={`${ARM_LABEL[index]} weapon class`}
+        onChange={(e) => onChange({ ...arm, cls: +e.target.value, id: 0 })}>
+        <option value={0}>Any weapon class (optional)</option>
+        {WEP_TYPES.map(([k, name]) => <option key={k} value={k}>{name}</option>)}
+      </select>
+      {cls !== 0 && (
+        <select value={arm.id} aria-label={`${ARM_LABEL[index]} weapon`}
+          onChange={(e) => pickWeapon(+e.target.value)}>
+          <option value={0}>Any {WEP_NAME[cls] || "weapon"} (optional)</option>
+          {classWeapons.map((w) => (
+            <option key={w[0]} value={w[0]}>
+              {w[1]}{anyPicks && !weaponCanRoll(w, picks, deep) ? " — can't roll these passives" : ""}
+            </option>
+          ))}
+        </select>
+      )}
+      {validation.arm.map((e, i) => <p key={i} className="oerr">✕ {e}</p>)}
+      <ul className="olines">
+          {fixed && (
+            <li>
+              <div className="oline">
+                <span className="oname">{cleanName(fixed.name)}</span>
+                {Math.abs(effectValue(fixed, sc) - 1) > 1e-4 && (
+                  <span className="oval">×{effectValue(fixed, sc).toFixed(3)}</span>
+                )}
+              </div>
+              <span className="picktag">fixed passive</span>
+              <LineInfo eff={fixed} sc={sc} errors={[]} />
+            </li>
+          )}
+          {lines.map((l, i) => {
+            const eff = picks[i] ? makeEffect(picks[i]) : null;
+            const picker = (
+              <EffectPicker
+                label={`${ARM_LABEL[index]} ${l.penalty ? "penalty" : "passive " + (i + 1)}`}
+                value={picks[i]}
+                placeholder={l.penalty ? "+ Pick its penalty" : "+ Pick a passive"}
+                options={armLineOptions(arm, i, { hero, deep, sc })}
+                onPick={(a) => onChange(setArmPick(arm, deep, i, a))}
+              />
+            );
+            const info = eff
+              ? <LineInfo eff={eff} sc={sc} errors={validation.lines[i]} />
+              : validation.lines[i].map((e, k) => <span key={k} className="oerr">✕ {e}</span>);
+            return (
+              <li key={i}>
+                {l.penalty ? (
+                  <div className="cursebox">
+                    <span className="curselabel">Penalty</span>
+                    {picker}
+                    {info}
+                  </div>
+                ) : (
+                  <>{picker}{info}</>
+                )}
+              </li>
+            );
+          })}
+          {weapon && !lines.length && !fixed && <li className="onote">This weapon rolls no passives.</li>}
+      </ul>
+    </section>
+  );
+}
+
 export default function RelicSelector() {
   const [hero, setHero] = usePersistentState("nrs.hero", 0);
   const [level, setLevel] = usePersistentState("nrs.level", 15);
@@ -172,8 +276,16 @@ export default function RelicSelector() {
   const [rawSlots, setSlots] = usePersistentState("nrs.slots", freshSlots);
   const slots = useMemo(() => normalizeSlots(rawSlots), [rawSlots]);
   const [elements, setElements] = useState(() => new Set(["phys"]));
-  const [wepClass, setWepClass] = usePersistentState("nrs.wepClass", 0);
-  const [weaponId, setWeaponId] = usePersistentState("nrs.weapon", 0);
+  // the earlier single-weapon picker's choice seeds Right hand 1
+  const [legacyWeapon] = usePersistentState("nrs.weapon", 0);
+  const [rawArms, setArms] = usePersistentState("nrs.arms", () => {
+    const a = freshArms();
+    if (WEAPON_BY_ID.has(legacyWeapon)) a[0] = { ...a[0], id: legacyWeapon };
+    return a;
+  });
+  const arms = useMemo(() => normalizeArms(rawArms), [rawArms]);
+  const [atkArm, setAtkArm] = usePersistentState("nrs.atkArm", 0);
+  const [hp, setHp] = usePersistentState("nrs.hp", 100);
   const [wepType, setWepType] = usePersistentState("nrs.wepType", 0);
   // conditions are assumed active by default — this tracks the ones opted OUT
   const [condsOffList, setCondsOffList] = usePersistentState("nrs.condsOff", []);
@@ -190,14 +302,19 @@ export default function RelicSelector() {
   const activeCount = deep ? 6 : 3;
 
   const stats = useMemo(() => heroBaseStats(hero, level), [hero, level]);
-  const classWeapons = useMemo(
-    () => NR_WEAPONS.filter((w) => w[2] === wepClass).sort((a, b) => a[1].localeCompare(b[1])),
-    [wepClass]
-  );
-  const weapon = useMemo(
-    () => (weaponId ? NR_WEAPONS.find((w) => w[0] === weaponId) || null : null),
-    [weaponId]
-  );
+  const armWeapons = arms.map((a) => WEAPON_BY_ID.get(a.id) || null);
+  // simulate the chosen hand, or the first filled slot
+  const atkIndex = armWeapons[atkArm] ? atkArm : armWeapons.findIndex(Boolean);
+  const weapon = atkIndex >= 0 ? armWeapons[atkIndex] : null;
+  // weapon classes carried 3+ times switch on "3+ X equipped" buffs
+  const carriedTypes = useMemo(() => {
+    const n = new Map();
+    arms.forEach((a, i) => {
+      const t = armWeapons[i]?.[2] || a.cls; // a class alone counts too
+      if (t) n.set(t, (n.get(t) || 0) + 1);
+    });
+    return new Set([...n].filter(([, c]) => c >= 3).map(([t]) => t));
+  }, [arms]);
   const weights = useMemo(
     () =>
       weapon
@@ -223,9 +340,15 @@ export default function RelicSelector() {
   const conds = useMemo(() => {
     const s = new Set();
     for (const c of condList) if (!condsOff.has(c.id)) s.add(c.id);
-    if (wepType) NR_COND_WEP.forEach((w, i) => { if (w === wepType) s.add(i); });
+    NR_COND_WEP.forEach((w, i) => {
+      if (!w) return;
+      const count = /^\d+\+ /.test(NR_CONDS[i]);
+      // "3+ X equipped": from the carried weapons (or the manual setup);
+      // "wielding X": the weapon being simulated
+      if (count ? carriedTypes.has(w) || w === wepType : w === weapon?.[2] || w === wepType) s.add(i);
+    });
     return s;
-  }, [condList, condsOff, wepType]);
+  }, [condList, condsOff, wepType, carriedTypes, weapon]);
 
   const atkOptions = useMemo(
     () =>
@@ -239,19 +362,28 @@ export default function RelicSelector() {
   const atkType = atkOptions.find((t) => t.label === atkLabel) || atkOptions[0];
 
   const activeSlots = useMemo(() => slots.slice(0, activeCount), [slots, activeCount]);
-  const effects = useMemo(() => activeSlots.flatMap(slotEffects), [activeSlots]);
+  const relicEffects = useMemo(() => activeSlots.flatMap(slotEffects), [activeSlots]);
+  const weaponEffects = useMemo(() => arms.flatMap((a) => armEffects(a, deep)), [arms, deep]);
+  const effects = useMemo(() => [...relicEffects, ...weaponEffects], [relicEffects, weaponEffects]);
 
   // ---- status inflicters ----
   const inflicters = useMemo(() => {
     const src = STATUSES.map(() => []);
-    const wm = weaponStatusMask(weapon);
-    STATUSES.forEach((s, i) => { if (wm & s.bit) src[i].push(weapon[1].replace(/^\[[^\]]*\]\s*/, "")); });
-    for (const e of effects) {
-      if (!INFLICTS.test(e.name) || SELF_BUILDUP.test(e.name)) continue;
-      STATUSES.forEach((s, i) => { if (s.inflict.test(e.name)) src[i].push("relic"); });
+    for (const w of armWeapons) {
+      if (!w) continue;
+      const wm = weaponStatusMask(w);
+      STATUSES.forEach((s, i) => { if (wm & s.bit) src[i].push(shortName(w)); });
     }
+    const scan = (list, label) => {
+      for (const e of list) {
+        if (!INFLICTS.test(e.name) || SELF_BUILDUP.test(e.name)) continue;
+        STATUSES.forEach((s, i) => { if (s.inflict.test(e.name)) src[i].push(label); });
+      }
+    };
+    scan(relicEffects, "relic");
+    scan(weaponEffects, "weapon passive");
     return src.map((l) => [...new Set(l)]);
-  }, [weapon, effects]);
+  }, [arms, relicEffects, weaponEffects]);
   const statusOn = STATUSES.map((s, i) =>
     s.key in statusSet ? statusSet[s.key] : inflicters[i].length > 0
   );
@@ -270,8 +402,9 @@ export default function RelicSelector() {
       stats,
       attackKind: atkType.kind,
       statusMask,
+      hp,
     }),
-    [weights, conds, weapon, stats, atkType, statusMask]
+    [weights, conds, weapon, stats, atkType, statusMask, hp]
   );
 
   // statusList is rebuilt every render; key the memo on its content
@@ -287,9 +420,12 @@ export default function RelicSelector() {
     );
     return validateSlot(slot, { hero, color: slotColors[i], deepSlot: i >= 3, namedElsewhere });
   });
-  const problems = validations
-    .slice(0, activeCount)
-    .reduce((n, v) => n + v.relic.length + v.lines.flat().length + v.curses.flat().length, 0);
+  const armValidations = arms.map((a) => validateArm(a, { hero, deep }));
+  const problems =
+    validations
+      .slice(0, activeCount)
+      .reduce((n, v) => n + v.relic.length + v.lines.flat().length + v.curses.flat().length, 0) +
+    armValidations.reduce((n, v) => n + v.arm.length + v.lines.flat().length, 0);
 
   const statusRows = useMemo(() => {
     if (!result || !statuses.length) return [];
@@ -301,6 +437,12 @@ export default function RelicSelector() {
   }, [result, statuses, effects, sc, statusMask]);
 
   const setSlot = (i, s) => setSlots(slots.map((x, j) => (j === i ? s : x)));
+  const setArm = (i, a) => setArms(arms.map((x, j) => (j === i ? a : x)));
+  const fill = () => {
+    const r = fillBest(slots, { hero, deepSlots: deep, sc, statuses, arms });
+    setSlots(r.slots);
+    setArms(r.arms);
+  };
   const toggleCond = (id) => {
     const next = new Set(condsOff);
     next.has(id) ? next.delete(id) : next.add(id);
@@ -360,17 +502,17 @@ export default function RelicSelector() {
 
         <div className="panel">
           <p className="ptitle">Your damage</p>
-          <select value={wepClass} aria-label="Weapon class"
-            onChange={(e) => { setWepClass(+e.target.value); setWeaponId(0); }}>
-            <option value={0}>No weapon — pick elements manually</option>
-            {WEP_TYPES.map(([k, name]) => <option key={k} value={k}>{name}</option>)}
-          </select>
-          {wepClass !== 0 && (
-            <select style={{ marginTop: 8 }} value={weaponId} aria-label="Weapon"
-              onChange={(e) => setWeaponId(+e.target.value)}>
-              <option value={0}>Pick a weapon…</option>
-              {classWeapons.map((w) => <option key={w[0]} value={w[0]}>{w[1]}</option>)}
+          {weapon ? (
+            <select value={atkIndex} aria-label="Attack with"
+              onChange={(e) => setAtkArm(+e.target.value)}>
+              {armWeapons.map((w, i) =>
+                w ? <option key={i} value={i}>Attack with: {shortName(w)} ({ARM_LABEL[i]})</option> : null
+              )}
             </select>
+          ) : (
+            <p className="onote" style={{ marginTop: 0 }}>
+              Add a weapon under Armaments to value its scaling, or pick damage elements below.
+            </p>
           )}
           <select style={{ marginTop: 8 }} value={atkType.label} aria-label="Attack to simulate"
             onChange={(e) => setAtkLabel(e.target.value)}>
@@ -445,10 +587,27 @@ export default function RelicSelector() {
         </div>
 
         <div className="panel">
+          <p className="ptitle">Your HP</p>
+          <label className="uptime">
+            <input type="range" min="1" max="100" value={hp}
+              onChange={(e) => setHp(+e.target.value)} aria-label="Current HP percent" />
+            <span>{hp === 100 ? "Full HP" : `${hp}% HP`}</span>
+          </label>
+          <p className="onote">
+            Drives "at full HP" and "at low HP" buffs (and "below max HP" penalties).
+          </p>
+        </div>
+
+        <div className="panel">
           <p className="ptitle">Weapon-count bonuses</p>
+          {carriedTypes.size > 0 && (
+            <p className="onote" style={{ marginTop: 0 }}>
+              From your armaments: {[...carriedTypes].map((t) => `3+ ${WEP_NAME[t] || "type " + t}`).join(", ")}
+            </p>
+          )}
           <select value={wepType} onChange={(e) => setWepType(+e.target.value)}
             aria-label="Weapon type carried">
-            <option value={0}>No 3+ weapon-type setup</option>
+            <option value={0}>No extra 3+ weapon-type setup</option>
             {wepOptions.map((w) => (
               <option key={w} value={w}>3+ {WEP_NAME[w] || "type " + w}</option>
             ))}
@@ -506,16 +665,16 @@ export default function RelicSelector() {
         <div className="loadbar">
           <span className={problems ? "oerr" : "ook"} aria-live="polite">
             {problems
-              ? `✕ ${problems} problem${problems > 1 ? "s" : ""} — these relics can't exist in-game`
+              ? `✕ ${problems} problem${problems > 1 ? "s" : ""} — this loadout can't exist in-game`
               : effects.length
-                ? "✓ Every relic is a legal roll"
-                : "Pick effects for each relic, or let the selector fill them."}
+                ? "✓ Every relic and weapon passive is a legal roll"
+                : "Pick relic effects and weapons, or let the selector fill empty lines."}
           </span>
-          <button type="button" className="chip"
-            onClick={() => setSlots(fillBest(slots, { hero, deepSlots: deep, sc, statuses }))}>
+          <button type="button" className="chip" onClick={fill}>
             Fill empty lines with best damage
           </button>
-          <button type="button" className="chip" onClick={() => setSlots(freshSlots())}>
+          <button type="button" className="chip"
+            onClick={() => { setSlots(freshSlots()); setArms(freshArms()); }}>
             Clear all
           </button>
         </div>
@@ -538,6 +697,20 @@ export default function RelicSelector() {
             </div>
           </>
         )}
+
+        <p className="rulehead deephead">Armaments</p>
+        <div className="optrelics">
+          {arms.map((arm, i) => (
+            <ArmCard key={i} index={i} arm={arm} deep={deep} hero={hero} sc={sc}
+              validation={armValidations[i]} attacking={i === atkIndex}
+              onAttack={() => setAtkArm(i)} onChange={(a) => setArm(i, a)} />
+          ))}
+        </div>
+        <p className="onote">
+          Every carried weapon's passives count whether it's in hand or not; the
+          ◆ weapon is the one whose attack rating and class the simulation uses.
+          Duplicate passives across weapons follow the same stacking rules as relics.
+        </p>
 
         {result && weights.filter(Boolean).length > 1 && (
           <p className="onote">
@@ -634,6 +807,16 @@ export default function RelicSelector() {
             can never roll on the same relic, and character-exclusive effects only exist for that
             Nightfarer. Named relics have fixed effects and must match the slot's color (white
             slots take any).
+          </p>
+          <p>
+            <b>Legal weapons.</b> A dropped weapon (<code>EquipParamCustomWeapon</code>) rolls
+            one passive line in Standard expeditions, from its class group and rarity: Common,
+            Uncommon and Rare weapons roll Potency 1, 2 and 3 tiers. In Deep of Night, Uncommon
+            and Rare weapons instead roll two passives — the second from a pool with extra
+            stat lines — plus a mandatory penalty. Legendaries carry only their fixed Weapon
+            Power, and starting armaments roll from their Nightfarer's own small tables. Torches
+            and ranged weapons, catalysts included, can't roll the on-hit proc passives. The
+            same compatibility rule as relics keeps two passives of one group off a weapon.
           </p>
           <p>
             <b>Damage.</b> Every effect's decoded <code>SpEffectParam</code> attack multipliers

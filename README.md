@@ -12,8 +12,12 @@ and it flags anything that can't exist in-game (effects sharing a roll
 compatibility group, wrong pool, wrong color, other heroes' exclusives). It then
 simulates damage for your Nightfarer, weapon, and attack type, including the
 ailments you keep on the enemy (poison, rot, frostbite, sleep, madness) with an
-uptime per ailment, applying the game's spCategory stacking rules. "Fill empty
-lines with best damage" completes a loadout around the lines you've picked.
+uptime per ailment, applying the game's spCategory stacking rules. It also takes
+your six armaments (three per hand) with their weapon passives — pick passives
+directly like relic effects, optionally naming the weapon; legality follows how
+the game rolls them by class and rarity, with Deep of Night penalties — plus your HP for
+full-/low-HP buffs. "Fill empty lines with best damage" completes a loadout
+around the relic lines and weapon passives you've picked.
 
 Live site: https://andrew-ukkonen.github.io/NightReignEffects/
 

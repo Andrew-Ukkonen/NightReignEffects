@@ -77,6 +77,19 @@ export function cleanName(name) {
   return m[1] ? `[${m[1]}] ${rest}` : rest;
 }
 
+// The decoded value strings misread SpEffect HP thresholds: conditionHpRate
+// (active at or above N% HP) came out as "activates below N×100% HP", and
+// conditionHp (active at or below N% HP) as "activates below N HP".
+export function fixHpText(mod) {
+  if (!mod) return mod;
+  return mod
+    .replace(/activates below ([\d.]+)% HP/g, (_, v) => {
+      const pct = +(+v / 100).toFixed(2);
+      return pct >= 100 ? "activates at full HP" : `activates at ≥${pct}% HP`;
+    })
+    .replace(/activates below ([\d.]+) HP/g, "activates at ≤$1% HP");
+}
+
 // Rows that are only a trigger or a script flag take their stacking rule from
 // the row that carries the buff (see scripts/gen-stacking.mjs); `rule` records
 // where it came from and the row's own (inert) category.
@@ -86,7 +99,7 @@ export const ROWS = NR_EFFECTS.map((r) => {
   const prio = fix ? fix[1] : r[3];
   return {
     id: r[0], name: cleanName(r[1]), cat, prio, dur: r[4],
-    srcs: r[5], weps: r[6], via: r[7], mod: r[8] || "",
+    srcs: r[5], weps: r[6], via: r[7], mod: fixHpText(r[8]) || "",
     v: fix?.[3] === "ladder" ? "tier" : verdict(cat),
     rule: fix ? { from: fix[2], how: fix[3], trigger: !!fix[4], ownCat: r[2], ownPrio: r[3] } : null,
     types: classify(r[8], r[4]),
